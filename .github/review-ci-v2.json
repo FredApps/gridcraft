@@ -1,0 +1,15 @@
+{
+  "base": "67e39faeea1fa4b603cbab421a30737db2cef8d9",
+  "head": "f8cd0c3ae5162e31cf5686b4503ac89e48131240",
+  "platforms": [],
+  "policy": "review-ci-v2.2-no-sonar",
+  "pr": 2227,
+  "repository": "storytold/gridcraft",
+  "source_tree": "85e27ebf7fc5103018f0f893104fdd30acb1cfd4",
+  "workflows": {
+    ".github/workflows/ci.yml": "3cb1ab68593566950e1d3337ad16e5f405c3a2974916e320ffd3deb59c19ebc0",
+    ".github/workflows/freebsd.yml": "e1a7c50ea47cadc0179b2827375aa3478e1dd7eb11822452e0c28d04bb66f5fa",
+    ".github/workflows/nix.yml": "209d5edd83df13de7c96a0fde5cf2952f3d7cd5e435be345664b249672894625",
+    ".github/workflows/packaging-lint.yml": "6d481577b0e28acbdafa6b312ebcd503cfc94cb5aa3110414905f1c89132ec5d"
+  }
+}
