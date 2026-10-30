@@ -28,7 +28,7 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     };
     ui.horizontal(|ui| {
         let label = ui.label(language.tr("Or select a category:"));
-        egui::ComboBox::from_id_salt("insertFunctionCategory")
+        craft_ui::ComboBox::from_id_salt("insertFunctionCategory")
             .width(220.0)
             .selected_text(language.tr(&category))
             .show_ui(ui, |ui| {
