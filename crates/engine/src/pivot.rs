@@ -313,6 +313,18 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     Ok(area)
 }
 
+/// Groups a report may hold while it is aggregated.
+const MAX_AGG_ENTRIES: usize = 5_000_000;
+/// Value accumulators a report may hold in all (one per value field in each group; 72 bytes each,
+/// so about 720 MB). Counting groups alone let a report with many value fields reach tens of GB
+/// before it was refused (#2169).
+const MAX_ACCUMULATORS: usize = 10_000_000;
+
+/// Whether `entries` groups of `per_entry` accumulators each are more than a report may hold.
+fn aggregation_too_large(entries: usize, per_entry: usize) -> bool {
+    entries > MAX_AGG_ENTRIES || entries.saturating_mul(per_entry.max(1)) > MAX_ACCUMULATORS
+}
+
 #[cfg(test)]
 mod fit_tests {
     use super::{aggregation_too_large, data_cols_exceed_sheet};
@@ -338,16 +350,4 @@ mod fit_tests {
         assert!(!data_cols_exceed_sheet(16_384, false, 0));
         assert!(data_cols_exceed_sheet(16_385, false, 0));
     }
-}
-
-/// Groups a report may hold while it is aggregated.
-const MAX_AGG_ENTRIES: usize = 5_000_000;
-/// Value accumulators a report may hold in all (one per value field in each group; 72 bytes each,
-/// so about 720 MB). Counting groups alone let a report with many value fields reach tens of GB
-/// before it was refused (#2169).
-const MAX_ACCUMULATORS: usize = 10_000_000;
-
-/// Whether `entries` groups of `per_entry` accumulators each are more than a report may hold.
-fn aggregation_too_large(entries: usize, per_entry: usize) -> bool {
-    entries > MAX_AGG_ENTRIES || entries.saturating_mul(per_entry.max(1)) > MAX_ACCUMULATORS
 }

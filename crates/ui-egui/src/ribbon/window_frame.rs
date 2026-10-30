@@ -42,7 +42,7 @@ pub fn window_frame(app: &mut SheetApp, ctx: &egui::Context) {
                         },
                     );
                 }
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
                 let m = r.center();
                 let stroke = egui::Stroke::new(1.0, if kind == "close" && hot { egui::Color32::WHITE } else { t.text });
                 match kind {

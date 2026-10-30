@@ -562,9 +562,6 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
-/// The AutoSum menu (Home › Editing and Formulas › Function Library): a function, or the Insert
-/// Function dialog.
-
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let name = st.font.name.clone();
     let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))).right_text(()));

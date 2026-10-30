@@ -759,8 +759,8 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
                         g.p.rect_filled(Rect::from_min_max(g.pt(x - 2.8, top), g.pt(x + 2.8, top + 1.7)), 0.9 * g.s, spine);
                     }
                 }
-                FnGlyph::Question => g.text(x, y, "?", 8.5, spine, true, false),
-                FnGlyph::Letter => g.text(x, y, "A", 8.0, spine, true, false),
+                FnGlyph::Question => g.text(x, y, "?", 8.5, spine, (true, false)),
+                FnGlyph::Letter => g.text(x, y, "A", 8.0, spine, (true, false)),
                 FnGlyph::Clock => {
                     g.circle(x, y, 3.2, None, Some(spine));
                     g.stroke(&[(x, y - 2.0), (x, y), (x + 1.6, y + 0.9)], spine);
@@ -769,7 +769,7 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
                     g.circle(x - 0.6, y - 0.6, 2.3, None, Some(spine));
                     g.line(&[(x + 1.0, y + 1.0), (x + 3.0, y + 3.0)], spine, 1.5);
                 }
-                FnGlyph::Theta => g.text(x, y, "θ", 8.5, spine, false, false),
+                FnGlyph::Theta => g.text(x, y, "θ", 8.5, spine, (false, false)),
                 FnGlyph::Dots => {
                     for dx in [-2.4, 0.0, 2.4] {
                         g.circle(x + dx, y, 0.9, Some(spine), None);

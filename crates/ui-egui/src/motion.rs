@@ -149,7 +149,7 @@ fn wheel_points(unit: MouseWheelUnit, delta: Vec2, input: &InputState, options: 
 pub fn unsmoothed_scroll(input: &InputState, options: &InputOptions) -> Vec2 {
     let mut total = Vec2::ZERO;
     for event in &input.events {
-        if let Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers } = event
+        if let Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers, .. } = event
             && !modifiers.matches_any(options.zoom_modifier)
         {
             let points = wheel_points(*unit, *delta, input, options);
@@ -177,7 +177,7 @@ pub fn unsmoothed_zoom(input: &InputState, options: &InputOptions) -> f32 {
     for event in &input.events {
         match event {
             Event::Zoom(factor) => zoom *= factor,
-            Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers } if modifiers.matches_any(options.zoom_modifier) => {
+            Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers, .. } if modifiers.matches_any(options.zoom_modifier) => {
                 let points = wheel_points(*unit, *delta, input, options);
                 zoom *= (options.scroll_zoom_speed * (points.x + points.y)).exp();
             }
@@ -193,7 +193,7 @@ mod tests {
     use egui::{Modifiers, vec2};
 
     fn wheel(unit: MouseWheelUnit, delta: Vec2, modifiers: Modifiers) -> Event {
-        Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers }
+        Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers, source: egui::MouseWheelSource::Unknown }
     }
 
     /// What the two readers make of one frame's events. The events are handed over as they
@@ -239,7 +239,13 @@ mod tests {
         // Shift turns the wheel sideways.
         assert_eq!(read(vec![wheel(MouseWheelUnit::Line, vec2(0.0, -1.0), Modifiers::SHIFT)]).0, vec2(-line, 0.0));
         // A gesture's start and end carry no scrolling.
-        let ended = Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, 50.0), phase: TouchPhase::End, modifiers: Modifiers::NONE };
+        let ended = Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: vec2(0.0, 50.0),
+            phase: TouchPhase::End,
+            modifiers: Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        };
         assert_eq!(read(vec![ended]).0, Vec2::ZERO);
     }
 

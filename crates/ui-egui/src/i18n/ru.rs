@@ -547,7 +547,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data Range:" => "Диапазон данных:",
         "Data validation" => "Проверка данных",
         "Database" => "Базы данных",
-        "Date & Time" => "Дата и время",
         "Date unit" => "Единица даты",
         "Day" => "День",
         "Decimal" => "Десятичное число",
@@ -704,14 +703,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Locking cells or hiding formulas has no effect until you protect the worksheet (Review › Protect Sheet)." => {
             "Защита ячеек и скрытие формул действуют только после защиты листа (Рецензирование › Защитить лист)."
         }
-        "Lookup & Reference" => "Поиск и ссылки",
         "Macros" => "Макросы",
         "Macros and scripts in this workbook (Alt+F8)" => "Макросы и сценарии этой книги (Alt+F8)",
         "Make Unconstrained Variables Non-Negative" => "Сделать переменные без ограничений неотрицательными",
         "Markers" => "Маркеры",
         "Match case" => "Учитывать регистр",
         "Match entire cell contents" => "Совпадение со всем содержимым ячейки",
-        "Math & Trig" => "Математика и тригонометрия",
         "Max" => "Максимум",
         "Maximum:" => "Максимум:",
         "Median" => "Медиана",
