@@ -57,7 +57,13 @@ fn wheel(h: &mut Harness, lines: f32, modifiers: Modifiers) {
     let at = h.state().grid.cells_rect.unwrap().center();
     h.input_mut().events.push(Event::PointerMoved(at));
     h.step();
-    h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Line, delta: vec2(0.0, lines), phase: TouchPhase::Move, modifiers });
+    h.input_mut().events.push(Event::MouseWheel {
+        unit: MouseWheelUnit::Line,
+        delta: vec2(0.0, lines),
+        phase: TouchPhase::Move,
+        modifiers,
+        source: egui::MouseWheelSource::Unknown,
+    });
     h.step();
 }
 

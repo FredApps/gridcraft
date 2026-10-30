@@ -2,7 +2,7 @@
 
 use egui::{Color32, RawInput, Rect, Shape, pos2, vec2};
 use gridcraft_engine::Session;
-use gridcraft_ui_egui::theme;
+use gridcraft_ui_egui::{SheetApp, theme};
 use serde_json::json;
 
 /// Builds a pivot report at D3 and returns the painted shapes after six frames in the caller's light or dark mode.
@@ -82,7 +82,7 @@ fn the_field_list_scrollbar_sits_at_the_pane_edge() {
             app.logic(&ctx);
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     let first = h.get_by_label("F1").rect();
