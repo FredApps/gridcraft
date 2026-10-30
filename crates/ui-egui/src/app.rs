@@ -1,3 +1,4 @@
+use crate::motion;
 #[cfg(test)]
 use super::clock::monotonic_ms;
 use super::clock::now_ms;
@@ -24,6 +25,30 @@ mod quit;
 mod view;
 
 impl SheetApp {
+    /// Whether animation effects run right now: the Animation effects preference, where Use
+    /// system setting follows what the system says ([`motion::Animations::enabled`]).
+    pub fn animations_on(&self) -> bool {
+        self.ui.animations.enabled(self.system_animations)
+    }
+
+    /// What the system last said about its animation effects (`None`: it doesn't say).
+    pub fn system_animations(&self) -> Option<bool> {
+        self.system_animations
+    }
+
+    /// Asks the host what the system says about animation effects.
+    pub(super) fn read_system_animations(&mut self) {
+        self.system_animations = self.services.animations_enabled.as_ref().and_then(|ask| ask());
+    }
+
+
+    pub(crate) fn flush_viewport_commands(&mut self, ctx: &egui::Context) {
+        for command in self.viewport_commands.drain(..) {
+            ctx.send_viewport_cmd(command);
+        }
+    }
+
+
     /// Constructs a `SheetApp` with default UI, grid, printing, control and screenshot state and the caller's session and services.
     pub fn new(session: Session, services: Services) -> SheetApp {
         SheetApp {
@@ -62,6 +87,8 @@ impl SheetApp {
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
             desktop_dark: None,
+            system_animations: None,
+            egui_motion: None,
             name_box: None,
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
@@ -75,6 +102,8 @@ impl SheetApp {
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),
             allow_close: false,
+            window_controls: false,
+            viewport_commands: Vec::new(),
             open_switch_windows: false,
             ui_window: None,
             parked: HashMap::new(),
@@ -126,6 +155,8 @@ impl SheetApp {
         // Screenshot results, deadlines and geometry validation belong to `logic`; `ui` only
         // issues the capture command (after every widget, so a command cannot be missed).
         control::drain_screenshots(self, ctx);
+        self.read_system_animations();
+        motion::apply(ctx, self.animations_on(), &mut self.egui_motion);
         control::poll(self, ctx);
         // Printing feedback is polled once per frame, here, so hidden windows and logic-only
         // frames still see worker completion. `ui` and the desktop app no longer poll it.
@@ -189,6 +220,10 @@ impl SheetApp {
             return;
         }
         let t0 = now_ms();
+        if !self.animations_on() {
+            let options = ctx.options(|o| o.input_options);
+            ctx.input_mut(|i| i.smooth_scroll_delta = motion::unsmoothed_scroll(i, &options));
+        }
         // A script may have switched windows since the last frame.
         self.follow_active_window();
         text_box::before_ui(self, &ctx);
@@ -266,6 +301,9 @@ impl SheetApp {
             self.synthetic_pending = false;
             self.synthetic_injected_at_pass = None;
         }
+        // Caption buttons and resizing run after the content widgets.
+        ribbon::window_frame(self, &ctx);
+        self.flush_viewport_commands(&ctx);
     }
 
     /// Current selection's top-left cell text as A1 (for the Name Box).

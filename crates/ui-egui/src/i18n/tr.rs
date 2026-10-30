@@ -226,8 +226,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sheet Name" => "Sayfa Adı",
         "Sheet\nName" => "Sayfa\nAdı",
         "Animations" => "Animasyonlar",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Seçim çerçevesini atlamak yerine taşındığınız hücreye kaydırarak hareket ettir"
+        "Animation effects" => "Animasyon efektleri",
+        "Use system setting" => "Sistem ayarını kullan",
+        "Animation effects|On" => "Açık",
+        "Animation effects|Off" => "Kapalı",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Yumuşak kaydırma ve yakınlaştırma; seçim çerçevesi taşındığınız hücreye kayarak gider"
         }
         "Insert Copied Cells" => "Kopyalanan Hücreleri Ekle",
         "Insert Copied Cells…" => "Kopyalanan Hücreleri Ekle…",
@@ -259,6 +263,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Kaydet",
         "Save As" => "Farklı Kaydet",
         "Export" => "Dışarı Aktar",
+        "Minimize" => "Simge durumuna küçült",
+        "Maximize" => "Ekranı kapla",
+        "Restore Down" => "Önceki boyuta getir",
         "Close" => "Kapat",
         "Options" => "Seçenekler",
         "Blank workbook" => "Boş çalışma kitabı",
@@ -380,6 +387,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "Otomatikleştir",
         "Table Design" => "Tablo Tasarımı",
         "Chart Design" => "Grafik Tasarımı",
+        "Pareto" => "Pareto",
+        "Cumulative %" => "Kümülatif %",
         "Ready" => "Hazır",
         "Enter" => "Giriş",
         "Edit" => "Düzenle",
@@ -403,10 +412,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More Number Formats…" => "Diğer Sayı Biçimleri…",
         "Financial" => "Finansal",
         "Logical" => "Mantıksal",
-        "Date &\nTime" => "Tarih ve\nSaat",
-        "Lookup &\nReference" => "Arama ve\nBaşvuru",
-        "Math &\nTrig" => "Matematik ve\nTrigonometri",
-        "More\nFunctions" => "Diğer\nİşlevler",
+        "Date & Time" => "Tarih ve Saat",
+        "Lookup & Reference" => "Arama ve Başvuru",
+        "Math & Trig" => "Matematik ve Trigonometri",
+        "More Functions" => "Diğer İşlevler",
         "Page Layout|Orientation" => "Sayfa Yönü",
         "Display theme" => "Görüntü teması",
         "System" => "Sistem",

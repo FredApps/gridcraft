@@ -172,12 +172,8 @@ pub(crate) fn to_utf8(xml: &[u8]) -> std::borrow::Cow<'_, [u8]> {
     std::borrow::Cow::Borrowed(xml)
 }
 
-fn local(name: &[u8]) -> String {
-    let n = match name.iter().rposition(|&b| b == b':') {
-        Some(i) => name.get(i + 1..).unwrap_or(name),
-        None => name,
-    };
-    String::from_utf8_lossy(n).into_owned()
+fn local(name: &str) -> String {
+    name.rsplit(':').next().unwrap_or(name).to_string()
 }
 
 fn start_el(e: &BytesStart<'_>) -> El {
@@ -185,12 +181,12 @@ fn start_el(e: &BytesStart<'_>) -> El {
     for a in e.attributes().with_checks(false).flatten() {
         let key = a.key.as_ref();
         // Namespace declarations carry no data for us.
-        if key == b"xmlns" || key.starts_with(b"xmlns:") {
+        if key == "xmlns" || key.starts_with("xmlns:") {
             continue;
         }
         let v = match a.normalized_value(XmlVersion::Explicit1_0) {
             Ok(v) => v.into_owned(),
-            Err(_) => String::from_utf8_lossy(&a.value).into_owned(),
+            Err(_) => a.value.to_string(),
         };
         el.attrs.push((local(key), v));
     }
@@ -230,8 +226,11 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     let mut root: Option<El> = None;
     let mut buf = Vec::new();
     // Elements kept in the tree so far, so a pathological part that passes the byte limits can
-    // still be refused before the tree itself outgrows memory.
+    // still be refused before the tree itself outgrows memory. Elements inside a `split` element
+    // are handed out with it and do not stay in the tree, so a streamed worksheet or shared-string
+    // table of any size passes: `kept_at_start` remembers the count when each open element began.
     let mut kept = 0usize;
+    let mut kept_at_start: Vec<usize> = Vec::new();
     // Attach a finished element to its parent (or emit it / make it the root).
     fn finish(
         stack: &mut [El],
@@ -240,11 +239,16 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         split: &[&str],
         cb: &mut dyn FnMut(El) -> Result<(), IoError>,
         kept: &mut usize,
+        kept_at_start: Option<usize>,
     ) -> Result<(), IoError> {
         match stack.last_mut() {
             Some(parent) => {
                 if split.contains(&el.name.as_str()) {
                     cb(el)?;
+                    // The element and everything parsed inside it have left the tree.
+                    if let Some(k) = kept_at_start {
+                        *kept = k;
+                    }
                 } else {
                     *kept = kept.saturating_add(1);
                     if *kept > MAX_XML_NODES {
@@ -269,25 +273,27 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
                     return Err(IoError::Xml("XML nested too deeply".into()));
                 }
                 stack.push(start_el(&e));
+                kept_at_start.push(kept);
             }
             Event::Empty(e) => {
                 let el = start_el(&e);
-                finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
+                finish(&mut stack, &mut root, el, split, cb, &mut kept, None)?;
             }
             Event::End(_) => {
                 if let Some(el) = stack.pop() {
-                    finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
+                    let at_start = kept_at_start.pop();
+                    finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
                 }
             }
             Event::Text(t) => {
                 if let Some(top) = stack.last_mut() {
-                    let s = t.xml_content(XmlVersion::Explicit1_0).map_err(|e| IoError::Xml(e.to_string()))?;
+                    let s = t.xml_content(XmlVersion::Explicit1_0);
                     top.text.push_str(&s);
                 }
             }
             Event::CData(t) => {
                 if let Some(top) = stack.last_mut() {
-                    top.text.push_str(&String::from_utf8_lossy(&t));
+                    top.text.push_str(&t);
                 }
             }
             Event::GeneralRef(r) => {
@@ -295,7 +301,7 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
                     match r.resolve_char_ref() {
                         Ok(Some(c)) => top.text.push(c),
                         _ => {
-                            let name = String::from_utf8_lossy(&r).into_owned();
+                            let name = r.to_string();
                             match named_entity(&name) {
                                 Some(c) => top.text.push(c),
                                 None => {
@@ -315,7 +321,8 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     }
     // Unclosed elements (truncated part): close them so we keep what we have.
     while let Some(el) = stack.pop() {
-        finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
+        let at_start = kept_at_start.pop();
+        finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
     }
     root.ok_or_else(|| IoError::Xml("no root element".into()))
 }
@@ -557,6 +564,26 @@ mod tests {
         for s in ["plain", " leading ", "a & <b>", "line\nbreak", "日本語", "x_x0041_"] {
             assert_eq!(si_body(s, None), t_el(s));
         }
+    }
+
+    #[test]
+    fn a_streamed_part_may_hold_more_elements_than_the_cap() {
+        // A worksheet of ordinary size: 5001 rows of 100 cells is 1,000,200 `c` and `v` elements,
+        // more than the cap, but the rows are streamed out one by one and never pile up in the
+        // tree, so the part is read whole. Kept in a tree (no split), the same part is refused.
+        let row = format!("<row>{}</row>", "<c><v>1</v></c>".repeat(100));
+        let xml = format!("<sheetData>{}</sheetData>", row.repeat(5001));
+        let mut rows = 0usize;
+        let root = parse_streaming(xml.as_bytes(), &["row"], &mut |r| {
+            assert_eq!(r.children.len(), 100);
+            rows += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(rows, 5001);
+        assert!(root.children.is_empty());
+        let err = parse(xml.as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("elements"), "{err}");
     }
 
     #[test]

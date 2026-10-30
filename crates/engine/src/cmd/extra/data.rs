@@ -37,6 +37,7 @@ pub(super) fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
         }
         t.columns = cols;
         t.range = r;
+        sheet.merges.retain(|m| !m.intersects(&r));
         cx.structural = true;
         Ok(Json::Null)
     })

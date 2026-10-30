@@ -38,8 +38,17 @@ pub fn start() {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
         // `?host=parent`: a same-origin page framing GridCraft (such as a Nextcloud app) opens
-        // workbooks in it and stores what it saves (`host`).
-        let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
+        // workbooks in it and stores what it saves (`host`). Unframed there is no parent, so that
+        // URL on its own stays the normal app with downloads. `data-host="page"` on the canvas
+        // opts a page in instead: it runs GridCraft in its own document and talks over DOM
+        // `CustomEvent`s on the canvas (`host`).
+        let bridge = if query_param("host").as_deref() == Some("parent") {
+            crate::host::Bridge::new()
+        } else if crate::hostmode::page_host_requested(canvas.get_attribute("data-host").as_deref()) {
+            Some(crate::host::Bridge::for_page(&canvas))
+        } else {
+            None
+        };
         let app_bridge = bridge.clone();
         let result = eframe::WebRunner::new()
             .start(
@@ -48,7 +57,7 @@ pub fn start() {
                 Box::new(move |cc| {
                     let inbox: Inbox = Inbox::default();
                     let mut session = Session::new();
-                    // In host mode the parent sends the workbook to edit; no sample meanwhile.
+                    // In host mode the host sends the workbook to edit; no sample meanwhile.
                     let q = if app_bridge.is_some() { String::new() } else { query() };
                     if let Some(name) = q.split(['?', '&']).find_map(|kv| kv.strip_prefix("sample=")) {
                         let _ = session.execute("file.new", serde_json::json!({"sample": name}));
@@ -236,8 +245,17 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             }
         })),
         inbox: Some(inbox),
+        animations_enabled: Some(animations_enabled()),
         ..Default::default()
     }
+}
+
+/// Whether the system has animation effects on, as the browser passes it on: off while the
+/// `prefers-reduced-motion: reduce` media query matches, `None` when the browser can't say. The
+/// query is made once and asked every frame; it follows the system's setting by itself.
+fn animations_enabled() -> Box<dyn Fn() -> Option<bool>> {
+    let reduce = web_sys::window().and_then(|window| window.match_media("(prefers-reduced-motion: reduce)").ok().flatten());
+    Box::new(move || reduce.as_ref().map(|query| !query.matches()))
 }
 
 /// Start inside the copy gesture; deferring `write` can lose browser user activation.

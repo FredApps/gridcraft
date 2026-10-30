@@ -20,6 +20,7 @@ pub mod outline;
 pub mod paper;
 pub mod pivot;
 pub mod pivot_calc;
+pub mod recent;
 pub mod record;
 pub mod sample;
 pub mod selection;
@@ -286,6 +287,19 @@ fn trim_to_budget(history: &mut Vec<HistoryEntry>, byte_budget: usize) {
     }
 }
 
+/// A writer that only counts the bytes written to it.
+struct ByteCounter(usize);
+
+impl std::io::Write for ByteCounter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(buf.len());
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 impl DocState {
     /// A document for `wb`, which came from where `trust` says: [`Trust::FromFile`] for anything
     /// read from bytes (a file, a download, a recovery copy), [`Trust::Local`] only for a workbook
@@ -390,6 +404,10 @@ pub struct Prefs {
     pub formula_bar: bool,
     /// The statistics the status bar shows for a selection (right-click the status bar).
     pub status_bar: StatusBarStats,
+    /// Formulas › Recently Used: the functions most recently entered in a formula, newest first
+    /// (at most [`recent::MAX`]; see [`recent`]). An application list, as in Excel.
+    #[serde(deserialize_with = "recent::lenient")]
+    pub recent_functions: Vec<String>,
 }
 
 /// The selection statistics shown on the status bar, set with `view.statusBar`. Excel turns on
@@ -424,6 +442,7 @@ impl Default for Prefs {
             user_dictionary: vec![],
             formula_bar: true,
             status_bar: StatusBarStats::default(),
+            recent_functions: recent::defaults(),
         }
     }
 }
@@ -496,6 +515,9 @@ pub struct Session {
     pub macro_debug: Option<macros::debug::Debugger>,
     /// Where the macro recorder started (beside `recorder`, its buffer).
     pub macro_recording: Option<macros::recorder::RecordingStart>,
+    /// How many journaled commands are running. Only the outermost one is journaled, and the
+    /// recorder keeps the same calls: the steps a Run Script runs are, since it isn't journaled.
+    journal_nesting: u32,
     /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
     pub draw_tool: String,
     pub draw_color: String,
@@ -505,6 +527,9 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// Whether `link.open` may open web and e-mail addresses without the user's confirmation
+    /// (#2181). Host code sets it; no command does.
+    pub link_policy: links::LinkPolicy,
     /// Open undo groups, innermost last.
     groups: Vec<OpenGroup>,
     next_group: u64,
@@ -598,7 +623,11 @@ impl Session {
     /// Journals a command, then trims the oldest entries past either cap. A recording in progress
     /// keeps pointing at the same entry (the steps the trim dropped are lost).
     fn push_journal(&mut self, id: &str, params: Json) {
-        let size = |e: &(String, Json)| serde_json::to_vec(e).map_or(0, |v| v.len());
+        // Counted as it is written, without building the text: a paste's params can be MBs.
+        let size = |e: &(String, Json)| {
+            let mut counter = ByteCounter(0);
+            serde_json::to_writer(&mut counter, e).map_or(0, |()| counter.0)
+        };
         // `journal` is public: if it was changed from outside, measure it again.
         if self.journal_sizes.len() != self.journal.len() {
             self.journal_sizes = self.journal.iter().map(size).collect();
@@ -690,7 +719,7 @@ impl Session {
             None => Vec::new(),
         };
         // The recorder keeps top-level calls with the place they ran in.
-        let place = (self.depth == 0 && self.recorder.is_some()).then(|| match self.active() {
+        let place = (self.journal_nesting == 0 && self.recorder.is_some()).then(|| match self.active() {
             Some(d) => (d.uid, d.wb.active_sheet(), d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
             None => (0, 0, String::new(), Selection::default()),
         });
@@ -698,9 +727,18 @@ impl Session {
         let requests_before = self.ui_requests.len();
         let marked = doc_uid.zip(start).map(|(uid, (_, len))| (uid, len));
         self.marks.extend(marked);
+        // Only the outermost command is journaled: the commands it runs for itself are part of it,
+        // so replaying the journal or a recorded script doesn't run them and then the command again.
+        let journals = spec.journal && self.journal_nesting == 0;
         self.depth = self.depth.saturating_add(1);
+        if spec.journal {
+            self.journal_nesting = self.journal_nesting.saturating_add(1);
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
         self.depth = self.depth.saturating_sub(1);
+        if spec.journal {
+            self.journal_nesting = self.journal_nesting.saturating_sub(1);
+        }
         if marked.is_some() {
             self.marks.pop();
         }
@@ -759,7 +797,7 @@ impl Session {
         if result.is_err() {
             self.rollback_groups_from(first_group);
         }
-        if spec.journal && result.is_ok() {
+        if journals && result.is_ok() {
             // A command that started recording is not part of the recording; one that stopped it
             // finds no recorder. A menu-style call that only opened a dialog (`file.open` with no
             // file, `home.formatCells` with no style) is not recorded either: the dialog's own
@@ -791,6 +829,7 @@ impl Session {
             if self.journal_paused == 0 {
                 self.push_journal(id, cmd::journal_params(&params));
             }
+            recent::note(&mut self.prefs.recent_functions, id, &params);
         }
         // Inside an undo group the group owns the step. A command that ended a group open before
         // it leaves the group its step and makes one of its own for what it changed after the end.
@@ -842,6 +881,10 @@ impl Session {
                     {
                         label = last.label.clone();
                     }
+                }
+                // A command that runs other commands (Subtotal, From Text/CSV, Remove Duplicates)
+                // is one step: the steps its nested commands made are taken back here.
+                if let Some((_, len)) = start {
                     d.undo.truncate(len);
                 }
                 push_entry(&mut d.undo, label, wb, &d.wb, sel);

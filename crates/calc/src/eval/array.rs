@@ -23,16 +23,23 @@ impl Agg {
 #[derive(Default)]
 pub(super) struct Acc {
     pub(super) sum: f64,
+    last: Option<f64>,
     pub(super) count: u64,
 }
 
 impl Acc {
+    pub(super) fn add(&mut self, n: f64) {
+        if let Some(prev) = self.last.replace(n) {
+            self.sum += prev;
+        }
+    }
+
     /// Takes a value found inside a reference: only numbers count. `Err` is an error value that
     /// ends `SUM` and `AVERAGE`; `COUNT` skips errors.
     pub(super) fn add_cell(&mut self, kind: Agg, v: &Value) -> Result<(), CellError> {
         match v {
             Value::Number(n) => {
-                self.sum += n;
+                self.add(*n);
                 self.count = self.count.saturating_add(1);
                 Ok(())
             }
@@ -43,10 +50,10 @@ impl Acc {
 
     pub(super) fn finish(&self, kind: Agg) -> Value {
         match kind {
-            Agg::Sum => Value::number(self.sum),
+            Agg::Sum => Value::number(self.last.map_or(self.sum, |l| gridcraft_core::arith::snap_add(self.sum, l))),
             Agg::Count => Value::number(self.count as f64),
             Agg::Average if self.count == 0 => Value::Error(CellError::Div0),
-            Agg::Average => Value::number(self.sum / self.count as f64),
+            Agg::Average => Value::number((self.sum + self.last.unwrap_or(0.0)) / self.count as f64),
         }
     }
 }
@@ -133,6 +140,17 @@ pub fn binary_values(op: BinOp, x: &Value, y: &Value, sys: gridcraft_core::DateS
     zip2(x, y, |a, b| binary_scalar(op, a, b, sys))
 }
 
+/// `a + b` or `a - b` with Excel's snap to zero (see [`super::Evaluator::value_root`]).
+pub(super) fn binary_scalar_snapped(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem) -> Value {
+    match (a, b) {
+        (Value::Error(_), _) | (_, Value::Error(_)) => binary_scalar(op, a, b, sys),
+        _ => match (a.to_number_in(sys), b.to_number_in(sys)) {
+            (Ok(x), Ok(y)) => Value::number(gridcraft_core::arith::snap_add(x, if op == BinOp::Sub { -y } else { y })),
+            (Err(e), _) | (_, Err(e)) => Value::Error(e),
+        },
+    }
+}
+
 fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem) -> Value {
     if let Value::Error(e) = a {
         return Value::Error(*e);
@@ -160,13 +178,7 @@ fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSyste
             }
         }),
         BinOp::Concat => match (a.to_text(), b.to_text()) {
-            (Ok(x), Ok(y)) => {
-                if x.len() + y.len() > 32767 * 4 {
-                    Value::Error(CellError::Value)
-                } else {
-                    Value::text(x + &y)
-                }
-            }
+            (Ok(x), Ok(y)) => Value::text(gridcraft_core::cap_text(x + &y)),
             (Err(e), _) | (_, Err(e)) => Value::Error(e),
         },
         BinOp::Eq => Value::Bool(compare(a, b) == Equal),

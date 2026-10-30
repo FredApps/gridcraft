@@ -37,6 +37,10 @@ including tests, 2026-10-10.
    undo and redo history as they were before the command (never-crash guard); a group that was
    open before the command and that the command ended or rolled back stays ended and keeps a
    step from its start to the restored workbook, so Undo still returns to the state before it.
+   Only the outermost command is journaled: a command that runs other commands (Subtotal, From
+   Text/CSV, Remove Duplicates) is one journal entry, so a recorded script or a replayed journal
+   doesn't run its inner steps and then the command again. Run Script isn't journaled itself; the
+   steps it runs are, once each.
 2. **Edits** change the model through copy-on-write bands; undo keeps the previous snapshot.
    Undo retains at most 100 steps and trims older steps when its estimated retained cell storage
    exceeds 128 MiB. The newest step remains undoable even if that step alone exceeds the budget.
@@ -59,13 +63,20 @@ drawing its own:
   `icons::paint_on_sheet`) keep their light values. `theme::contrast_tests` holds every
   foreground/background pair to WCAG 2 (4.5:1 for text, 3:1 for glyphs) in both themes; a new
   token pair is added there. Icons (`icons.rs`, drawn in code) take their paper and category
-  colours (`theme::Cat`) from the tokens.
+  colours (`theme::Cat`) from the tokens; `icons::paint_accent` gives an icon an accent colour,
+  drawn on its coloured part when it has one (the spine and glyph of `Icon::FnBook`).
 - **Ribbon widgets**: `widgets.rs` has the buttons every tab is built from (`big_button`,
-  `small_button`, `split_button`, `big_split_button`, `toggle_button`), translated through
-  `i18n` in one place. Split buttons return the main and arrow responses separately, with
-  accessible names (`AutoSum`, `AutoSum options`). The ribbon card scrolls a tab wider than the
+  `small_button`, `small_button_accent`, `split_button`, `big_split_button`, `toggle_button`),
+  translated through `i18n` in one place. Split buttons return the main and arrow responses
+  separately, with accessible names (`AutoSum`, `AutoSum options`); labelled big and small
+  buttons report their label as their accessible name. The ribbon card scrolls a tab wider than the
   window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
   and a test keeps every tab within the card's three rows.
+- **Function Library**: `function_library.rs` holds the function categories (engine id and
+  label, in the Insert Function dialog's order), the function list built once from
+  `cmd::formulas::function_list`, and the menus of Formulas › Function Library, including the
+  AutoSum menu that Home › Editing shares. Recently Used and the Insert Function dialog's Most
+  Recently Used category list what `formulas.recentlyUsed` returns.
 - **Code editor**: `widgets::code_editor(ui, id, &mut text, Lang, max_lines)` (`code_editor.rs`)
   edits code in the monospace font with `Tokens::syntax` colours: Python (keywords, strings
   including triple-quoted ones, numbers, comments, builtins) and LaTeX (commands, scripts,
@@ -102,6 +113,14 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
   a recording leaves it out, so playing the recording back never stops the run. The
   history limit is applied when the outermost command finishes; until then the steps made inside
   it are bounded on their own.
+- **Recently used functions** (`recent.rs`). `Prefs::recent_functions` holds the ten functions
+  most recently entered in a formula, newest first. `Session::execute` updates it for every
+  `cell.*` and `range.*` command it journals, from any source (interface, control channel, MCP,
+  script). It reads at most 2,000 of the formulas a command enters, starting from the last one
+  (the most recent), so a large paste costs no more than that; `formulas.recentlyUsed` returns
+  it. It is kept with the other preferences (`prefs.json`, the browser's storage on the
+  web) and read leniently, so a malformed value loses only this list. It does not read the
+  journal back, so the journal's trimming does not affect it.
 - **Recording buffer** (`record.rs`). `Session::start_recording` collects each successful
   top-level command with the document, sheet and selection it ran in, without secret parameters.
   Commands run by other commands are not recorded, nor is a menu-style call that only opened a
@@ -161,6 +180,9 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 |---|---|---|
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
+| 2026-10-24 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
+| 2026-10-24 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`); labelled ribbon buttons report their label |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
+| 2026-10-15 | minor | Data flow: nested commands are one journal entry |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

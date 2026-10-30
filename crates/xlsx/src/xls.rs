@@ -3,26 +3,30 @@
 //! <https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xls/cd03cb5f-ca02-4934-a391-bb674cb8aa06>.
 //!
 //! Read: worksheets, shared strings, cell values, formulas (text and cached results, including
-//! shared and array formulas), number formats, the 1904 date system, merged cells, column
-//! widths, row heights, defined names, print areas, print titles and the calculation settings
-//! (mode, iteration, precision as displayed). Everything else (fonts, fills, borders, charts,
-//! pictures, comments, conditional formats, validation, macros) is skipped with a warning.
+//! shared and array formulas), cell formatting (number formats, fonts, fills, borders,
+//! alignment, protection, the colour palette and user-defined cell styles), the 1904 date
+//! system, merged cells, column widths, row heights, defined names, print areas, print titles
+//! cell notes, hyperlinks, frozen panes and the calculation settings (mode, iteration, precision as displayed). Everything else
+//! (charts, pictures, conditional formats, validation, macros) is skipped with a
+//! warning.
 //! Encrypted workbooks and pre-BIFF8 versions are refused.
 
 mod formula;
 mod ftab;
+mod objects;
 mod records;
+mod styles;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_model::{CalcMode, CalcSettings, Cell, DefinedName, Formula, LineInfo, NumFmt, Sheet, Style, StyleId, Visibility, Workbook};
+use gridcraft_model::{CalcMode, CalcSettings, Cell, DefinedName, Formula, LineInfo, Sheet, StyleId, Visibility, Workbook};
 
 use crate::cfb::Compound;
-use crate::tables::{builtin_format, col_width_to_px, pt_to_px};
+use crate::tables::{col_width_to_px, pt_to_px};
 use crate::{IoError, ReadReport};
-use formula::{Links, Mode, SupBook, Unsupported, Xti, cell_error, decode};
+use formula::{Links, Mode, SupBook, Unsupported, Xti, cell_error, decode, decode_with_names};
 use records::{Cursor, Record, Records};
 
 const MAX_CELLS: usize = 4_000_000;
@@ -131,7 +135,7 @@ struct Globals {
     sheets: Vec<BoundSheet>,
     date1904: bool,
     formats: HashMap<u16, String>,
-    xf_formats: Vec<u16>,
+    styles: styles::StyleRecords,
     sst: Vec<Arc<str>>,
     links: Links,
     names: Vec<Lbl>,
@@ -161,19 +165,11 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     let mut wb = Workbook::new();
     wb.sheets.clear();
     wb.date_system = if g.date1904 { DateSystem::D1904 } else { DateSystem::D1900 };
-    // One model style per XF: only the number format is imported.
-    let styles: Vec<StyleId> = g
-        .xf_formats
-        .iter()
-        .map(|ifmt| {
-            let code = g.formats.get(ifmt).map(String::as_str).or_else(|| builtin_format(u32::from(*ifmt))).unwrap_or("General");
-            if code.eq_ignore_ascii_case("General") {
-                StyleId::DEFAULT
-            } else {
-                wb.styles.intern(Style { num_fmt: NumFmt::new(code), ..Style::default() })
-            }
-        })
-        .collect();
+    // One model style per XF.
+    let styles = styles::build(&g.styles, &g.formats, &mut wb);
+    if g.styles.short {
+        report.warn("Some cell formatting records were shorter than expected; the formatting present was kept.");
+    }
 
     // BoundSheet8 index → model sheet index.
     let mut model_index: Vec<Option<usize>> = Vec::with_capacity(g.sheets.len());
@@ -210,7 +206,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     // The overview comes first.
     report.warnings.insert(
         0,
-        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, number formats, merged cells, column widths, row heights and defined names were read. Fonts, fills, borders, charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
+        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, merged cells, column widths, row heights, defined names, notes, hyperlinks and frozen panes were read. Charts, pictures and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
     );
     Ok((wb, report))
 }
@@ -280,10 +276,10 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
                 budget.text(code.len())?;
                 g.formats.insert(ifmt, code);
             }
-            0x00E0 if g.xf_formats.len() < MAX_XFS => {
-                c.u16()?;
-                g.xf_formats.push(c.u16()?);
-            }
+            0x00E0 => g.styles.xf(&mut c, MAX_XFS),
+            0x0031 => g.styles.font(&mut c),
+            0x0092 => g.styles.palette(&mut c),
+            0x0293 => g.styles.style(&mut c),
             0x00FC => g.sst = shared_strings(&mut c, budget)?,
             0x01AE => {
                 let _ctab = c.u16()?;
@@ -322,8 +318,42 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
             _ => {}
         }
     }
-    // The same test `defined_names` applies, before any cell formula is decoded.
-    let skipped = g.names.iter().map(|l| !l.rgce.is_empty() && decode(&l.rgce, &l.rgcb, CellRef::new(0, 0), Mode::Name, &g.links).is_err()).collect();
+    // The same test `defined_names` applies, before any cell formula is decoded: a name whose
+    // formula can't be decoded is skipped, and so is every name that uses one, through any chain
+    // of names and whichever order they were defined in (#2192).
+    let n = g.names.len();
+    let mut skipped = vec![false; n];
+    // users[j]: the names whose formula refers to name j (by its Lbl index, so two scopes'
+    // names with the same text are told apart)
+    let mut users: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, l) in g.names.iter().enumerate() {
+        // A name without a formula is not imported either, so neither are its users.
+        if l.rgce.is_empty() {
+            skipped[i] = true;
+            continue;
+        }
+        match decode_with_names(&l.rgce, &l.rgcb, CellRef::new(0, 0), Mode::Name, &g.links) {
+            Err(_) => skipped[i] = true,
+            Ok((_, used)) => {
+                for j in used {
+                    if j != i
+                        && let Some(u) = users.get_mut(j)
+                    {
+                        u.push(i);
+                    }
+                }
+            }
+        }
+    }
+    let mut todo: Vec<usize> = (0..n).filter(|&i| skipped[i]).collect();
+    while let Some(j) = todo.pop() {
+        for &i in &users[j] {
+            if !skipped[i] {
+                skipped[i] = true;
+                todo.push(i);
+            }
+        }
+    }
     g.links.skipped = skipped;
     Ok(g)
 }
@@ -424,6 +454,7 @@ struct SheetState<'g> {
     dropped: usize,
     unsupported: Vec<&'static str>,
     calc: CalcSettings,
+    objects: objects::Objects,
 }
 
 impl SheetState<'_> {
@@ -565,6 +596,7 @@ fn worksheet(
         dropped: 0,
         unsupported: vec![],
         calc: CalcSettings::default(),
+        objects: objects::Objects::default(),
     };
     let mut depth = 1usize;
     while let Some(rec) = recs.next_record()? {
@@ -593,6 +625,7 @@ fn worksheet(
     let pending = std::mem::take(&mut st.pending);
     resolve_pending(&mut st, &arrays, &shared, &pending);
     blank_array_followers(&mut st, &pending);
+    std::mem::take(&mut st.objects).finish(&mut st.sheet, report);
     if st.dropped > 0 {
         report.warn(format!("{} cells outside the grid were skipped.", st.dropped));
     }
@@ -783,21 +816,9 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
                 st.sheet.default_row_height = pt_to_px(f64::from(height) / 20.0);
             }
         }
-        0x023E => {
-            let flags = if c.remaining() >= WINDOW2_MIN_LEN { c.u16().ok() } else { None };
-            let Some(flags) = flags else { return Ok(()) };
-            let on = |bit: u16| flags & bit != 0;
-            st.sheet.show_formulas = on(0x0001);
-            st.sheet.show_gridlines = on(0x0002);
-            st.sheet.show_headings = on(0x0004);
-            st.sheet.show_zeros = on(0x0010);
-            st.sheet.right_to_left = on(0x0040);
-        }
-        0x001C => report.warn("Cell comments in .xls files are not imported yet."),
-        0x00EC => report.warn("Pictures, charts and shapes in .xls files are not imported yet."),
+        id if objects::handles(id) => st.objects.record(rec, budget)?,
         0x01B0 | 0x0879 => report.warn("Conditional formatting in .xls files is not imported yet."),
         0x01B2 => report.warn("Data validation in .xls files is not imported yet."),
-        0x01B8 => report.warn("Hyperlinks in .xls files are not imported yet."),
         0x00B0 => report.warn("PivotTables in .xls files are not imported yet; their values were kept."),
         _ => {}
     }

@@ -760,6 +760,59 @@ fn chart_sheets_survive_a_round_trip_in_place() {
     assert_eq!(written_sheets(&again), written_sheets(&u));
 }
 
+/// A slicer cache names its PivotTable's sheet by that sheet's `sheetId`, which counts the chart
+/// sheets kept between the worksheets: "More" is the third sheet in the file.
+#[test]
+fn a_slicer_cache_names_its_pivot_sheet_by_the_written_sheet_id() {
+    use gridcraft_core::{CellRef, Value};
+    use gridcraft_model::{Anchor, PivotField, PivotFunc, PivotTable, PivotValue, Slicer, SlicerCrossFilter, SlicerPivot, SlicerSource};
+    let (mut wb, _) = read_xlsx(&chartsheet_package()).unwrap();
+    let data = wb.sheet_mut(0).unwrap();
+    for (r, (region, sales)) in [("Region", None), ("East", Some(10.0)), ("West", Some(20.0))].into_iter().enumerate() {
+        data.set_value(CellRef::new(r as u32, 0), Value::text(region));
+        data.set_value(CellRef::new(r as u32, 1), sales.map_or(Value::text("Sales"), Value::Number));
+    }
+    let more = wb.sheet_mut(1).unwrap();
+    more.pivots.push(PivotTable {
+        id: 1,
+        name: "P1".into(),
+        source: "Data!$A$1:$B$3".into(),
+        anchor: CellRef::new(3, 0),
+        rows: vec![PivotField { source_col: "Region".into(), ..PivotField::default() }],
+        values: vec![PivotValue { source_col: "Sales".into(), func: PivotFunc::Sum, name: "Sum of Sales".into(), ..PivotValue::default() }],
+        ..PivotTable::default()
+    });
+    more.slicers.push(Slicer {
+        id: 1,
+        source: SlicerSource::Pivot {
+            pivots: vec![SlicerPivot { sheet: "More".into(), name: "P1".into() }],
+            field: "Region".into(),
+            sort: Default::default(),
+            cross_filter: SlicerCrossFilter::default(),
+            show_missing: true,
+        },
+        caption: "Region".into(),
+        anchor: Anchor { cell: CellRef::new(2, 5), dx: 0.0, dy: 0.0, width: 180.0, height: 200.0, mode: Default::default() },
+        columns: 1,
+        name: "Region".into(),
+        style: String::new(),
+        row_height: None,
+    });
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    let wbx = xml::parse(u.parts.get("xl/workbook.xml").unwrap()).unwrap();
+    let sheet_id = wbx.child("sheets").unwrap().kids("sheet").find(|s| s.attr("name") == Some("More")).unwrap().attr("sheetId").unwrap().to_string();
+    let cache = u.text("xl/slicerCaches/slicerCache1.xml");
+    assert_eq!(attr_of(&cache, "pivotTable", "tabId"), sheet_id, "{cache}");
+
+    let (back, rep) = read_xlsx(&out).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("slicer")), "{:?}", rep.warnings);
+    let slicers = &back.sheet(1).unwrap().slicers;
+    assert_eq!(slicers.len(), 1);
+    assert_eq!(slicers[0].source, wb.sheet(1).unwrap().slicers[0].source);
+}
+
 #[test]
 fn a_chart_sheet_whose_data_sheet_was_renamed_is_dropped_with_its_parts() {
     let (mut wb, _) = read_xlsx(&chartsheet_package()).unwrap();
@@ -828,7 +881,9 @@ fn file_version_and_calc_features_survive_a_save() {
         assert_eq!(root.children.first().map(|e| e.name.as_str()), Some("fileVersion"), "{text}");
         assert_eq!(root.children.last().map(|e| e.name.as_str()), Some("extLst"), "{text}");
         assert!(text.contains(r#"<fileVersion appName="xl" lastEdited="7" lowestEdited="7" rupBuild="11008"/>"#), "{text}");
-        assert!(text.contains(&format!("<extLst>{calc_features}</extLst>")), "{text}");
+        // The x15 workbook properties are kept too, in source order (see tests::extlist).
+        let x15 = r#"<ext uri="{140A7094-0E35-4892-8432-C4D2E57EDEB5}" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><x15:workbookPr chartTrackingRefBase="1"/></ext>"#;
+        assert!(text.contains(&format!("<extLst>{x15}{calc_features}</extLst>")), "{text}");
     }
 
     // A workbook that had neither gets a <fileVersion> naming GridCraft (#1699), kept on the next

@@ -1,3 +1,4 @@
+use crate::motion;
 use super::{
     INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
     formula_locale, i18n, json, now_ms, printing,
@@ -101,6 +102,15 @@ impl SheetApp {
         if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
             return self.export_pdf_with_picker(params);
         }
+        // Menu-style AutoSum on one cell proposes its formula in the editor with the range
+        // pointed and selected, so a click, drag, arrow key or typing replaces it, as in Excel.
+        // Programmatic callers use `run` and get the total entered.
+        if id == "formulas.autoSum"
+            && params.get("range").and_then(Json::as_str).is_none()
+            && self.session.active().is_some_and(|d| d.selection.current().is_single())
+        {
+            return self.auto_sum_in_editor(params);
+        }
         // Recommended Charts with no chart type named (ribbon button, keytip, command search) asks
         // which chart to insert; programmatic callers of `run` still get the first recommendation.
         if id == "insert.recommendedCharts" && params.get("type").is_none() {
@@ -122,6 +132,24 @@ impl SheetApp {
         }
     }
 
+    /// Runs AutoSum on the active cell without entering it (`enter: false`) and points the
+    /// proposed range in the editor that opens.
+    fn auto_sum_in_editor(&mut self, params: Json) {
+        let mut params = if params.is_object() { params } else { json!({}) };
+        if let Some(map) = params.as_object_mut() {
+            map.insert("enter".into(), Json::Bool(false));
+        }
+        if let Err(e) = self.run("formulas.autoSum", params) {
+            return self.alert(e);
+        }
+        if let Some(ed) = self.editor.as_mut() {
+            ed.point_last_argument();
+            if ed.can_point() {
+                self.session.mode = gridcraft_engine::Mode::Point;
+            }
+        }
+    }
+
     /// Shows a command error: a toast for an unavailable command, else a message box.
     pub(super) fn alert(&mut self, e: String) {
         // Shown in the window the user ends up in, also after a command that switched windows.
@@ -136,6 +164,27 @@ impl SheetApp {
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
+            "ui.window.minimize" => {
+                self.viewport_commands.push(egui::ViewportCommand::Minimized(true));
+                Ok(Json::Null)
+            }
+            "ui.window.maximize" => {
+                let on = p.get("on").and_then(Json::as_bool).unwrap_or(true);
+                self.viewport_commands.push(egui::ViewportCommand::Maximized(on));
+                Ok(Json::Null)
+            }
+            "ui.window.close" => {
+                self.viewport_commands.push(egui::ViewportCommand::Close);
+                Ok(Json::Null)
+            }
+            "ui.window.beginResize" => {
+                let Some(direction) = p.get("direction").and_then(Json::as_str).and_then(crate::parse_resize_direction) else {
+                    return Some(Err("direction must be north, south, east, west, northeast, northwest, southeast, or southwest".into()));
+                };
+                self.viewport_commands.push(egui::ViewportCommand::BeginResize(direction));
+                Ok(Json::Null)
+            }
+
             "app.checkForUpdates" | "help.checkForUpdates" => {
                 self.check_for_updates();
                 Ok(Json::Null)
@@ -172,8 +221,21 @@ impl SheetApp {
                 Ok(json!({"mode": self.ui.theme_mode()}))
             }
             "view.animations" => {
-                self.ui.animations = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.animations);
-                Ok(json!({"on": self.ui.animations}))
+                // `{"mode": "system" | "on" | "off"}`, or the checkbox's `{"on": bool}`. Without
+                // either, it toggles what shows now.
+                self.read_system_animations();
+                let mode = if let Some(mode) = p.get("mode").filter(|mode| !mode.is_null()) {
+                    match mode.as_str().and_then(motion::Animations::parse) {
+                        Some(mode) => mode,
+                        None => return Some(Err("animations mode must be system, on, or off".into())),
+                    }
+                } else if p.get("on").and_then(Json::as_bool).unwrap_or(!self.animations_on()) {
+                    motion::Animations::On
+                } else {
+                    motion::Animations::Off
+                };
+                self.ui.animations = mode;
+                Ok(json!({"mode": mode.code(), "on": self.animations_on(), "system": self.system_animations}))
             }
             "options.autoComplete" => {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);

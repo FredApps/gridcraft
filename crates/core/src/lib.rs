@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod addr;
+pub mod arith;
 pub mod color;
 pub mod date;
 pub mod parse;
@@ -14,4 +15,4 @@ pub use addr::{
     split_sheet, unquote_sheet,
 };
 pub use date::DateSystem;
-pub use value::{Array, CellError, Value, compare, compare_numbers, compare_text, number_to_text, sort_compare};
+pub use value::{Array, CellError, MAX_TEXT_CHARS, Value, cap_text, cap_value, compare, compare_numbers, compare_text, number_to_text, sort_compare};

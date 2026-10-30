@@ -58,6 +58,21 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .response
             .labelled_by(label.id);
         ui.end_row();
+        ui.label(lang.tr("Animation effects"));
+        let animations = app.ui.animations;
+        craft_ui::ComboBox::from_id_salt("backstage_animations")
+            .width(160.0)
+            .selected_text(lang.tr(animations.label()))
+            .show_ui(ui, |ui| {
+                for mode in crate::motion::Animations::ALL {
+                    if ui.selectable_label(animations == mode, lang.tr(mode.label())).clicked() {
+                        app.run_or_alert("view.animations", json!({"mode": mode.code()}));
+                    }
+                }
+            })
+            .response
+            .on_hover_text(lang.tr(crate::motion::HINT));
+        ui.end_row();
         let label = ui.label(lang.tr("Interface language"));
         craft_ui::ComboBox::from_id_salt("backstage_language")
             .width(160.0)

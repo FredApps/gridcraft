@@ -1,4 +1,4 @@
-use super::items::{Acc, FieldItems, build_tree, collect_siblings, is_collapsed, item_label};
+use super::items::{Acc, FieldItems, build_tree, collect_siblings, is_collapsed, item_label, selects};
 use super::output::{AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, data_cols_exceed_sheet, flatten_cols};
 use super::{
     CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_VALUE_FIELDS, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
@@ -101,8 +101,8 @@ fn aggregate_record(
 ) -> Result<(), String> {
     for ((c, field, group, _), fmt) in input.filters.iter().zip(input.filter_fmts) {
         if let Some(selected) = &field.selected {
-            let label = item_label(input.wb, rec.get(*c).unwrap_or(&Value::Empty), *group, fmt);
-            if !selected.iter().any(|value| value.eq_ignore_ascii_case(&label)) {
+            let value = rec.get(*c).unwrap_or(&Value::Empty);
+            if !selects(selected, value, &item_label(input.wb, value, *group, fmt), *group) {
                 return Ok(());
             }
         }
@@ -150,7 +150,7 @@ fn aggregate_record(
     if !input.cols.is_empty() && data_cols_exceed_sheet(data.col_leaves.len(), input.pt.grand_totals_rows, input.vals.len()) {
         return Err("The PivotTable report will not fit on the sheet.".into());
     }
-    if data.aggs.len() > 5_000_000 {
+    if super::aggregation_too_large(data.aggs.len(), input.vals.len() + input.extra.len()) {
         return Err("The PivotTable report is too large.".into());
     }
     Ok(())
@@ -380,15 +380,14 @@ fn show_value(definition: &PivotValue, raw: Value, lookup: &ValueLookup<'_>, con
 type ReportFilter<'a> = (usize, &'a PivotFilter, PivotDateGroup, bool);
 
 fn report_filters<'a>(pt: &'a PivotTable, src: &Source) -> (Vec<ReportFilter<'a>>, Vec<ReportFilter<'a>>) {
-    let axis_group =
-        |name: &str| pt.rows.iter().chain(pt.columns.iter()).find(|field| field.source_col.eq_ignore_ascii_case(name)).map(|field| field.date_group);
+    let on_axis = |name: &str| pt.rows.iter().chain(pt.columns.iter()).any(|f| f.source_col.eq_ignore_ascii_case(name));
     let filters: Vec<_> = pt
         .filters
         .iter()
         .filter_map(|filter| {
             let column = src.col(&filter.source_col)?;
-            let group = axis_group(&filter.source_col);
-            Some((column, filter, group.unwrap_or_default(), group.is_none()))
+            let group = pt.filter_group(filter);
+            Some((column, filter, group, !on_axis(&filter.source_col) && !filter.hidden))
         })
         .collect();
     let shown = filters.iter().copied().filter(|filter| filter.3).collect();

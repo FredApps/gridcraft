@@ -281,6 +281,9 @@ fn days360_core(d1: &DateTime, d2: &DateTime, european: bool) -> i64 {
         a = a.min(30);
         b = b.min(30);
     } else {
+        if last_of_feb(d1) && last_of_feb(d2) {
+            b = 30;
+        }
         if a == 31 || last_of_feb(d1) {
             a = 30;
         }
@@ -449,13 +452,15 @@ pub(crate) fn yearfrac_core(sys: DateSystem, s: i64, e: i64, basis: i64) -> R<f6
     Ok(match basis {
         0 => {
             let (mut a, mut b) = (d1.day as i64, d2.day as i64);
+            // Excel tests the end-31 rule against the original start day, before a February end moves to 30.
+            let start_30 = a >= 30;
             if last_of_feb(&d1) && last_of_feb(&d2) {
                 b = 30;
             }
             if last_of_feb(&d1) || a == 31 {
                 a = 30;
             }
-            if a == 30 && b == 31 {
+            if start_30 && b == 31 {
                 b = 30;
             }
             ((d2.year as i64 - d1.year as i64) * 360 + (d2.month as i64 - d1.month as i64) * 30 + b - a) as f64 / 360.0
@@ -763,6 +768,7 @@ mod tests {
         close(ev("DAYS360", vec![n(d(2011.0, 1.0, 30.0)), n(d(2011.0, 12.0, 31.0)), b(true)]), 330.0);
         close(ev("DAYS360", vec![n(d(2011.0, 2.0, 28.0)), n(d(2011.0, 3.0, 31.0))]), 30.0);
         close(ev("DAYS360", vec![n(d(2011.0, 1.0, 1.0)), n(d(2011.0, 1.0, 31.0))]), 30.0);
+        close(ev("DAYS360", vec![n(d(2021.0, 2.0, 28.0)), n(d(2021.0, 2.0, 28.0))]), 0.0);
     }
 
     #[test]
@@ -817,8 +823,13 @@ mod tests {
 
     #[test]
     fn yearfrac_basis0_feb_end_to_31() {
-        close(ev("YEARFRAC", vec![n(d(2021.0, 2.0, 28.0)), n(d(2021.0, 3.0, 31.0)), n(0.0)]), 30.0 / 360.0);
-        close(ev("YEARFRAC", vec![n(d(2020.0, 2.0, 29.0)), n(d(2020.0, 3.0, 31.0)), n(0.0)]), 30.0 / 360.0);
+        // Excel 16: a February-end start keeps its original day for the end-31 test, so 31 days.
+        close(ev("YEARFRAC", vec![n(d(2021.0, 2.0, 28.0)), n(d(2021.0, 3.0, 31.0)), n(0.0)]), 0.086_111_111_111_111_11);
+        close(ev("YEARFRAC", vec![n(d(2020.0, 2.0, 29.0)), n(d(2020.0, 3.0, 31.0)), n(0.0)]), 0.086_111_111_111_111_11);
+        close(ev("YEARFRAC", vec![n(d(2021.0, 3.0, 31.0)), n(d(2021.0, 2.0, 28.0)), n(0.0)]), 0.086_111_111_111_111_11);
+        close(ev("YEARFRAC", vec![n(d(2021.0, 1.0, 31.0)), n(d(2021.0, 2.0, 28.0)), n(0.0)]), 0.077_777_777_777_777_78);
+        close(ev("YEARFRAC", vec![n(d(2021.0, 1.0, 30.0)), n(d(2021.0, 3.0, 31.0)), n(0.0)]), 1.0 / 6.0);
+        close(ev("YEARFRAC", vec![n(d(2020.0, 2.0, 29.0)), n(d(2021.0, 2.0, 28.0)), n(0.0)]), 1.0);
         close(ev("YEARFRAC", vec![n(d(2021.0, 2.0, 28.0)), n(d(2021.0, 2.0, 28.0)), n(0.0)]), 0.0);
     }
 

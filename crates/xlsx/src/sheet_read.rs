@@ -8,8 +8,8 @@ use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRe
 use gridcraft_formula::Expr;
 use gridcraft_model::{
     AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
-    NoteBox, NoteCorner, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation,
-    ValidationKind, XmlColumnPr,
+    NoteBox, NoteCorner, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Style, Table, TableColumn, TotalsFn,
+    Validation, ValidationKind, XmlColumnPr,
 };
 
 use crate::IoError;
@@ -25,7 +25,7 @@ mod rules;
 
 pub use parts::{read_autofilter, read_table};
 use parts::{read_comments, read_hyperlinks, read_note_shapes, read_threaded};
-use rules::{read_cf, read_validation};
+use rules::{read_cf, read_validation, read_x14_cf};
 
 struct Shared {
     anchor: CellRef,
@@ -45,6 +45,11 @@ struct RowState {
     /// Row-membership checks served so far, for the work cap above.
     dynamic_checks: u64,
     dropped: u64,
+    /// Cells dropped because their address was repeated, ran backwards or named another row,
+    /// and cells a repeated row element replaced on a row it had already read.
+    misplaced: u64,
+    /// Row number of the last row element read: Excel writes each row once, in increasing order.
+    last_row: Option<u32>,
     rows: u64,
 }
 
@@ -133,6 +138,9 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     };
     if st.dropped > 0 {
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
+    }
+    if st.misplaced > 0 {
+        cx.warn(format!("sheet \"{name}\": {} cells with a duplicate, out-of-order or wrong-row address were dropped or replaced", st.misplaced));
     }
     drop(bytes);
 
@@ -259,7 +267,10 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     }
                 }
             }
-            "extLst" => read_ext(cx, e, &mut sheet),
+            "extLst" => {
+                read_ext(cx, e, &mut sheet);
+                crate::slicer::read_sheet_ext(cx, e, &rels, name);
+            }
             "protectedRanges" => read_protected_ranges(e, &mut sheet),
             _ => {}
         }
@@ -421,7 +432,19 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
         st.dropped += 1;
         return;
     }
-    st.next_row = r + 1;
+    // Excel writes each row once, in ascending order, and repairs a file that does not — but an
+    // element repeating the row it just wrote is not repaired, it is merged: the later value
+    // wins, and its new cells and row formatting join the row (observed in Excel 16). An element
+    // whose number does not go past the last one read is therefore either that repeat or a row
+    // going backwards, which Excel removes together with its cells. Neither may move the row
+    // bookkeeping: a backward element must not become the mark the next element is compared
+    // against, and an element with no address must not reuse a row number already read.
+    let ordered = st.last_row.is_none_or(|last| r > last);
+    let repeat = st.last_row == Some(r);
+    if ordered {
+        st.next_row = r + 1;
+        st.last_row = Some(r);
+    }
     let mut info = LineInfo::default();
     if let Some(ht) = row.attr_f64("ht") {
         info.custom = row.flag("customHeight", false);
@@ -438,7 +461,7 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
     {
         info.style = Some(cx.style(Some(s)));
     }
-    if info != LineInfo::default() {
+    if (ordered || repeat) && info != LineInfo::default() {
         sheet.rows.insert(r, info);
     }
     let mut next_col = 0u32;
@@ -456,6 +479,22 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
         if pos.col >= MAX_COLS || pos.row >= MAX_ROWS {
             st.dropped += 1;
             continue;
+        }
+        // Excel writes a row's cells in ascending column order, all in that row; a file with any
+        // other shape is damaged, and Excel repairs it ("Removed Records: Cell information").
+        // Placing such cells as they are written would move values, let a later duplicate shadow
+        // an earlier cell and land an unaddressed cell on an unrelated column, all without a word
+        // to the user. A repeat is read the same way, with its own column cursor, so only the
+        // cells it names wrongly are turned away; a backward element still drops every cell.
+        if (!ordered && !repeat) || pos.row != r || pos.col < next_col {
+            st.misplaced += 1;
+            continue;
+        }
+        // A repeat may name a cell the row already holds. Excel takes the later value without a
+        // word, and #2531 asks that nothing change silently, so the replacement is counted with
+        // the cells that are dropped.
+        if repeat && sheet.cell(pos).is_some() {
+            st.misplaced += 1;
         }
         next_col = pos.col + 1;
         read_cell(cx, sheet, st, c, pos);
@@ -525,7 +564,12 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     let value = if formula.is_none() && in_dynamic(st, pos) { Value::Empty } else { value };
-    sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
+    // A formula without dynamic-array metadata is a legacy formula, unless entered as a
+    // Ctrl+Shift+Enter array.
+    if !dynamic && formula.as_ref().is_some_and(|f| f.array.is_none() && f.expr_arc().is_some()) {
+        cx.legacy_formulas.push(pos);
+    }
+    sheet.set_cell(pos, Cell { value, formula: formula.map(Arc::new), style });
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
@@ -627,6 +671,7 @@ pub fn parse_sqref(s: Option<&str>) -> Vec<RangeRef> {
 /// Worksheet extensions: x14 data validations and sparklines.
 fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
     for ext in e.kids("ext") {
+        crate::extlist::read_sheet_ext(cx, ext);
         for c in &ext.children {
             match c.name.as_str() {
                 "dataValidations" => {
@@ -653,23 +698,7 @@ fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
                         }
                     }
                 }
-                "conditionalFormattings" => {
-                    let mut skipped = false;
-                    for r in c.kids("conditionalFormatting").flat_map(|f| f.kids("cfRule")) {
-                        let idx = r.attr("id").and_then(|id| cx.cf_ext_ids.iter().find(|(i, _)| i == id)).map(|(_, n)| *n);
-                        match (idx.and_then(|n| sheet.cond_formats.get_mut(n)), r.child("dataBar")) {
-                            (Some(CondFormat { rule: CfRule::DataBar { gradient, .. }, .. }), Some(db)) => {
-                                *gradient = db.flag("gradient", true);
-                                // Only the fill style is modelled; borders, lengths, axis or negative colours are lost.
-                                skipped |= db.attrs.iter().any(|(k, _)| k != "gradient") || db.children.iter().any(|k| k.name != "cfvo");
-                            }
-                            _ => skipped = true,
-                        }
-                    }
-                    if skipped {
-                        cx.warn("some Excel 2010 conditional format extensions were skipped");
-                    }
-                }
+                "conditionalFormattings" => read_x14_cf(cx, c, sheet),
                 _ => {}
             }
         }

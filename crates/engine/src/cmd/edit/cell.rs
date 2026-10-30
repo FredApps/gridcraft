@@ -5,6 +5,18 @@ use super::{
 
 // ---------------------------------------------------------------- entry
 
+/// Whether typing `input` into a cell enters a formula: `=…`, or `+…`/`-…` followed by a name or
+/// a parenthesis (not a number), as Excel takes `+SUM(1)`.
+pub(crate) fn is_formula_input(input: &str) -> bool {
+    input.starts_with('=')
+        || (input.len() > 1
+            && (input.starts_with('+') || input.starts_with('-'))
+            && gridcraft_core::parse::parse_number_text(input).is_none()
+            && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
+}
+
+
+
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
 /// format). Inherits the destination's cell, row or column style, including its number
 /// format, before parsing. Errors when the formula can't be parsed.
@@ -16,14 +28,9 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     }
     let fmt_is_text = wb.styles.get(style).num_fmt.as_str() == "@";
     if fmt_is_text {
-        return Ok(Some(Cell { value: Value::text(input), formula: None, style }));
+        return Ok(Some(Cell { value: gridcraft_core::cap_value(Value::text(input)), formula: None, style }));
     }
-    let is_formula = input.starts_with('=')
-        || (input.len() > 1
-            && (input.starts_with('+') || input.starts_with('-'))
-            && gridcraft_core::parse::parse_number_text(input).is_none()
-            && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('));
-    if is_formula {
+    if is_formula_input(input) {
         let body = input.strip_prefix('=').unwrap_or(input);
         let expr = wb.name_call_case(parse_typed_formula(body)?);
         check_arg_counts(&expr)?;
@@ -53,6 +60,8 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         return Ok(Some(cell));
     }
     let mut parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
+    // Excel cuts typed text to 32,767 characters (after any leading apostrophe is dropped).
+    parsed.value = gridcraft_core::cap_value(parsed.value);
     // Like Excel's automatic percent entry: a bare number of 1 or more typed into a cell already
     // formatted as a percentage is a percent (3 -> 3%); smaller numbers are taken as fractions.
     if parsed.format.is_none()
@@ -227,7 +236,7 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                         if text.contains('\n') && !cx.wb.styles.get(style).align.wrap {
                             style = cx.wb.styles.derive(style, |s| s.align.wrap = true);
                         }
-                        Some(Cell { value: Value::Text(text.as_str().into()), formula: None, style })
+                        Some(Cell { value: gridcraft_core::cap_value(Value::Text(text.as_str().into())), formula: None, style })
                     }
                     _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,
                 };

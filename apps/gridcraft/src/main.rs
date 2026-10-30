@@ -9,14 +9,17 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod animations;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
+mod gpu_limits;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod opener;
 mod print;
 
 use std::cell::RefCell;
@@ -211,16 +214,16 @@ fn open_with_system(target: &str) {
         log::warn!("refused to open {target:?}: only http, https and mailto links are opened");
         return;
     };
-    let target = target.as_str();
-    let cmd = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(windows) {
-        "explorer"
-    } else {
-        "xdg-open"
+    // By absolute path where the platform has one (#2176): a bare `explorer` would be looked up
+    // in the application's directory first.
+    let env = |key: &str| std::env::var(key).ok();
+    let (system_root, windir) = (env("SystemRoot"), env("windir"));
+    let Some((program, arg)) = opener::opener_command(opener::Os::current(), &target, system_root.as_deref(), windir.as_deref()) else {
+        log::warn!("refused to open {target:?}: it could be read as an option");
+        return;
     };
-    if let Err(e) = std::process::Command::new(cmd).arg(target).spawn() {
-        log::warn!("{cmd} {target}: {e}");
+    if let Err(e) = std::process::Command::new(&program).arg(&arg).spawn() {
+        log::warn!("{} {arg}: {e}", program.display());
     }
 }
 
@@ -327,12 +330,16 @@ fn main() -> eframe::Result<()> {
     for f in &files {
         app.open_path(f);
     }
+    // Linux/BSD: Excel's layout — no window-manager title bar above ours; our title bar carries the
+    // window controls. `GRIDCRAFT_SYSTEM_TITLEBAR=1` keeps the system frame.
+    app.window_controls = cfg!(not(any(target_os = "macos", target_os = "windows"))) && std::env::var_os("GRIDCRAFT_SYSTEM_TITLEBAR").is_none();
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("GridCraft")
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([640.0, 420.0])
         .with_app_id("ai.storyteller.gridcraft")
-        .with_drag_and_drop(true);
+        .with_drag_and_drop(true)
+        .with_decorations(!app.window_controls);
     if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
     }
@@ -340,9 +347,7 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(i);
     }
     let window_builder = viewport.clone();
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut options = options;
+    let mut options = eframe::NativeOptions { viewport, ..Default::default() };
     // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
     // manager showed a "no" cursor. Run through XWayland when it's there; GRIDCRAFT_WAYLAND=1
     // keeps the native Wayland backend.
@@ -353,6 +358,7 @@ fn main() -> eframe::Result<()> {
             b.with_x11();
         }));
     }
+    gpu_limits::request_adapter_texture_size(&mut options);
     // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
     // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
     #[cfg(target_os = "windows")]
@@ -383,6 +389,9 @@ fn main() -> eframe::Result<()> {
                     return Err("the app was already created".into());
                 };
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
+                // The system's animation setting, which Options ▸ Animation effects follows
+                // unless it is set to On or Off.
+                app.services.animations_enabled = Some(animations::hook(&cc.egui_ctx));
                 if let Some(port) = control_port {
                     match control_server::start(port, control_token.clone(), cc.egui_ctx.clone()) {
                         Ok(rx) => app.control_rx = Some(rx),

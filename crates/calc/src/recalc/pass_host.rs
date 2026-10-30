@@ -208,7 +208,7 @@ impl PassHost<'_> {
             if self.cycle_seen.insert(k) {
                 self.cycles.push(k);
             }
-            return Value::Error(CellError::Circ);
+            return self.previous(k);
         }
         if self.depth >= MAX_NESTED {
             self.suspend = Some(k);
@@ -227,7 +227,7 @@ impl PassHost<'_> {
         let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
-            ev.value(&expr)
+            ev.value_root(&expr)
         };
         let out_of_stack = std::mem::replace(&mut self.out_of_stack, outer_out_of_stack);
         if out_of_stack && self.depth > 1 && self.suspend.is_none() {
@@ -301,12 +301,18 @@ impl PassHost<'_> {
             }
             _ => v,
         };
+        let v = if !self.iterate && self.cycle_seen.contains(&k) {
+            self.spills.remove(&k);
+            self.previous(k)
+        } else {
+            v
+        };
         self.results.insert(k, v.clone());
         v
     }
 
-    /// A formula's previous value for iterative calculation: from the last iteration, else the
-    /// value it shows. Blank, and the `#CIRC!` of a loop calculated with iteration off, are 0.
+    /// A formula's previous value: from the last iteration, else the value it shows.
+    /// Blank, and the `#CIRC!` older versions showed for a loop, are 0.
     fn previous(&self, k: Key) -> Value {
         let v = match self.prev.get(&k) {
             Some(v) => v.clone(),

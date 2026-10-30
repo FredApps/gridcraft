@@ -253,6 +253,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Αποθήκευση",
         "Save As" => "Αποθήκευση ως",
         "Export" => "Εξαγωγή",
+        "Minimize" => "Ελαχιστοποίηση",
+        "Maximize" => "Μεγιστοποίηση",
+        "Restore Down" => "Επαναφορά",
         "Close" => "Κλείσιμο",
         "Options" => "Επιλογές",
         "Blank workbook" => "Κενό βιβλίο εργασίας",
@@ -366,6 +369,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "Αυτοματισμός",
         "Table Design" => "Σχεδίαση πίνακα",
         "Chart Design" => "Σχεδίαση γραφήματος",
+        "Pareto" => "Παρέτο",
+        "Cumulative %" => "Αθροιστικό %",
         "Ready" => "Έτοιμο",
         "Enter" => "Εισαγωγή",
         "Edit" => "Επεξεργασία",
@@ -389,10 +394,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More Number Formats…" => "Περισσότερες μορφές αριθμών…",
         "Financial" => "Οικονομικές",
         "Logical" => "Λογικές",
-        "Date &\nTime" => "Ημερομηνία και\nώρα",
-        "Lookup &\nReference" => "Αναζήτηση και\nαναφορά",
-        "Math &\nTrig" => "Μαθηματικά και\nτριγωνομετρία",
-        "More\nFunctions" => "Περισσότερες\nσυναρτήσεις",
+        "More Functions" => "Περισσότερες συναρτήσεις",
         "Page Layout|Orientation" => "Προσανατολισμός σελίδας",
         "Display theme" => "Θέμα εμφάνισης",
         "System" => "Σύστημα",
@@ -580,7 +582,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edit Name" => "Επεξεργασία ονόματος",
         "New Name" => "Νέο όνομα",
         "Format Cells" => "Μορφοποίηση κελιών",
-        "Formula Builder" => "Δημιουργός τύπων",
         "Find and Replace" => "Εύρεση και αντικατάσταση",
         "Go To" => "Μετάβαση",
         "Insert Calculated Field" => "Εισαγωγή υπολογιζόμενου πεδίου",
@@ -971,8 +972,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Tab|Insert" => "Εισαγωγή",
         "AutoSave" => "Αυτόματη αποθήκευση",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Ομαλή μετακίνηση του περιγράμματος επιλογής στο νέο κελί αντί για απότομη μεταπήδηση"
+        "Animation effects" => "Εφέ κίνησης",
+        "Use system setting" => "Χρήση ρύθμισης συστήματος",
+        "Animation effects|On" => "Ενεργό",
+        "Animation effects|Off" => "Ανενεργό",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Ομαλή κύλιση και μεγέθυνση, και περίγραμμα επιλογής που μετακινείται ομαλά στο κελί όπου πηγαίνετε"
         }
         "Sheet structure is locked: sheets can't be added, moved, renamed or deleted." => {
             "Η δομή του βιβλίου εργασίας είναι κλειδωμένη: δεν επιτρέπεται προσθήκη, μετακίνηση, μετονομασία ή διαγραφή φύλλων."

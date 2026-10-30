@@ -222,8 +222,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark Mode" => "Tamni režim",
         "Display theme" => "Tema prikaza",
         "Animations" => "Animacije",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Kliziti obris selekcije do ćelije na koju se pomeraš umesto skoka"
+        "Animation effects" => "Efekti animacije",
+        "Use system setting" => "Koristi sistemsko podešavanje",
+        "Animation effects|On" => "Uključeno",
+        "Animation effects|Off" => "Isključeno",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Glatko pomeranje i uvećanje; obris selekcije klizi do ćelije na koju se pomeraš"
         }
         "System" => "Sistem",
         "Light" => "Svetla",
@@ -276,6 +280,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "Automatizacija",
         "Table Design" => "Dizajn tabele",
         "Chart Design" => "Dizajn grafikona",
+        "Pareto" => "Pareto",
+        "Cumulative %" => "Kumulativno %",
         "Ready" => "Spremno",
         "Enter" => "Unos",
         "Edit" => "Uređivanje",
@@ -299,10 +305,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More Number Formats…" => "Još formata brojeva…",
         "Financial" => "Finansijsko",
         "Logical" => "Logičko",
-        "Date &\nTime" => "Datum i\nvreme",
-        "Lookup &\nReference" => "Pretraga i\nreference",
-        "Math &\nTrig" => "Matematika i\ntrigonometrija",
-        "More\nFunctions" => "Još\nfunkcija",
+        "Date & Time" => "Datum i vreme",
+        "Lookup & Reference" => "Pretraga i reference",
+        "Math & Trig" => "Matematika i trigonometrija",
+        "More Functions" => "Još funkcija",
         "Sheet Options|View" => "Prikaz",
         "Print" => "Štampaj",
         "Print What" => "Šta štampati",
@@ -343,6 +349,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Sačuvaj",
         "Save As" => "Sačuvaj kao",
         "Export" => "Izvezi",
+        "Minimize" => "Minimizuj",
+        "Maximize" => "Maksimizuj",
+        "Restore Down" => "Vrati",
         "Close" => "Zatvori",
         "Options" => "Opcije",
         "Account" => "Nalog",

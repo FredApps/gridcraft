@@ -13,7 +13,7 @@ pub use gridcraft_core::quote_sheet;
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, split_sheet};
 use gridcraft_model::{
     BorderLine, BorderStyle, Cell, Chart, Color, Fill, HAlign, NumFmt, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs,
-    PivotSort, PivotTable, PivotValue, Series, Style, StyleId, Workbook,
+    PivotSort, PivotTable, PivotValue, Series, SlicerCrossFilter, Style, StyleId, Workbook,
 };
 
 use crate::pivot_calc::CalcSet;
@@ -27,12 +27,11 @@ use charts::rebind_charts;
 pub use charts::{chart_link, chart_series, clear_output, links_to, parse_chart_link};
 use compute::compute_from;
 pub use compute::{NOT_A_VALUE_CELL, detail_cells, detail_records};
-pub use items::{distinct_labels, func_caption, item_label};
+pub use items::{SlicerTile, distinct_labels, func_caption, item_label, slicer_tiles};
 #[cfg(test)]
 use output::data_cols_exceed_sheet;
 pub use output::{CellKind, OutCell, Output, RowKind};
 use output::{cell_style, look};
-
 /// Largest source block read (cells).
 pub const MAX_SOURCE_CELLS: u64 = 10_000_000;
 /// Largest report written (cells).
@@ -316,7 +315,22 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
 
 #[cfg(test)]
 mod fit_tests {
-    use super::data_cols_exceed_sheet;
+    use super::{aggregation_too_large, data_cols_exceed_sheet};
+
+    #[test]
+    fn aggregation_budget_counts_every_value_field() {
+        // #2169: a million groups of 256 value fields (about 20 GB) passed the old group count.
+        assert!(aggregation_too_large(1_000_000, 256 + 1));
+        assert!(aggregation_too_large(40_000, 256));
+        // A one-field report keeps the old limit of five million groups.
+        assert!(!aggregation_too_large(5_000_000, 1));
+        assert!(aggregation_too_large(5_000_001, 1));
+        assert!(!aggregation_too_large(3_000_000, 3));
+        assert!(!aggregation_too_large(0, 0));
+        assert!(aggregation_too_large(usize::MAX, usize::MAX));
+    }
+
+
 
     #[test]
     fn column_budget_counts_value_fields_and_grand_total() {
@@ -326,4 +340,16 @@ mod fit_tests {
         assert!(!data_cols_exceed_sheet(16_384, false, 0));
         assert!(data_cols_exceed_sheet(16_385, false, 0));
     }
+}
+
+/// Groups a report may hold while it is aggregated.
+const MAX_AGG_ENTRIES: usize = 5_000_000;
+/// Value accumulators a report may hold in all (one per value field in each group; 72 bytes each,
+/// so about 720 MB). Counting groups alone let a report with many value fields reach tens of GB
+/// before it was refused (#2169).
+const MAX_ACCUMULATORS: usize = 10_000_000;
+
+/// Whether `entries` groups of `per_entry` accumulators each are more than a report may hold.
+fn aggregation_too_large(entries: usize, per_entry: usize) -> bool {
+    entries > MAX_AGG_ENTRIES || entries.saturating_mul(per_entry.max(1)) > MAX_ACCUMULATORS
 }

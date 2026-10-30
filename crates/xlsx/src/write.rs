@@ -9,7 +9,7 @@ use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
-use crate::{IoError, XlsxKind};
+use crate::{FunctionInfo, IoError, XlsxKind};
 
 pub const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 pub const NS_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -110,6 +110,10 @@ pub struct Out {
     overrides: Vec<(String, String)>,
     defaults: BTreeMap<String, String>,
     pub dxfs: Vec<Style>,
+    /// Number format ids assigned so far (inline `x14:dxf` formats); `styles.xml` adds the rest.
+    pub num_fmts: crate::styles::NumFmts,
+    /// Excel 2010 conditional format rules written so far (each needs a unique id).
+    pub x14_cf_rules: u32,
     pub sst: Sst,
     pub images: u32,
     pub charts: u32,
@@ -126,8 +130,11 @@ pub struct Out {
     pub dynamic_arrays: bool,
     pub needs_calc: bool,
     pub cell_pictures: crate::richdata::PicturesOut,
+    pub slicers: crate::slicer::SlicerWriter,
     /// Kept (pass-through) parts written so far.
     pub kept: crate::passthrough::KeptOut,
+    /// Decides which formulas need dynamic-array metadata.
+    pub functions: FunctionInfo,
 }
 
 impl Out {
@@ -160,6 +167,12 @@ impl Out {
 /// file only needs ids that are unique within it).
 pub fn person_guid(i: usize) -> String {
     format!("{{00000000-0000-4000-8002-{:012X}}}", i as u64 & 0xFFFF_FFFF_FFFF)
+}
+
+/// Id of the i-th Excel 2010 conditional format rule of the package (deterministic and unique,
+/// like [`person_guid`]).
+pub fn x14_cf_rule_guid(i: u32) -> String {
+    format!("{{00000000-0000-4000-8003-{i:012X}}}")
 }
 
 /// `$A$1:$D$20` (or `$1:$3` / `$A:$C`).
@@ -204,13 +217,13 @@ fn check_sheet_names(wb: &Workbook) -> Result<(), IoError> {
 /// Workbook name written in a PivotChart's link when the file name isn't known.
 const DEFAULT_BOOK_NAME: &str = "Workbook.xlsx";
 
-pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
-    write_xlsx_named(wb, kind, None)
+pub fn write_xlsx(wb: &Workbook, kind: XlsxKind, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
+    write_xlsx_named_with(wb, kind, None, functions)
 }
 
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
-pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
     }
@@ -223,6 +236,8 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         overrides: vec![],
         defaults: BTreeMap::new(),
         dxfs: vec![],
+        num_fmts: Default::default(),
+        x14_cf_rules: 0,
         sst: Sst::default(),
         images: 0,
         charts: 0,
@@ -236,7 +251,9 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         dynamic_arrays: false,
         needs_calc: false,
         cell_pictures: Default::default(),
+        slicers: crate::slicer::SlicerWriter::new(wb),
         kept: Default::default(),
+        functions,
     };
     out.kept.reserve_vml_blocks(wb);
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
@@ -250,9 +267,8 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     };
 
     let mut wb_rels = Rels::default();
-    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels);
-
-    let names = write_defined_names(wb, &kept, &out.chart_names);
+    let (sheets_xml, kept, pivots, sheet_ids) = write_sheets(wb, &mut out, active, &mut wb_rels);
+    let names = write_defined_names(wb, &kept, &out.chart_names, &out.slicers);
 
     let mut w = format!("{XML_DECL}<workbook xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
     // A workbook read from a file keeps its <fileVersion> as it was: Excel trusts the saved values
@@ -304,14 +320,15 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     }
     w.push_str("/>");
     w.push_str(&pivots.workbook_xml(&mut wb_rels));
+    let slicer_ext = std::mem::take(&mut out.slicers).finish(wb, &sheet_ids, &pivots, &mut out, &mut wb_rels);
     let exts = crate::passthrough::workbook_elements(wb, "ext");
-    if !exts.is_empty() {
-        let _ = write!(w, "<extLst>{exts}</extLst>");
+    if !slicer_ext.is_empty() || !exts.is_empty() {
+        let _ = write!(w, "<extLst>{slicer_ext}{exts}</extLst>");
     }
     w.push_str("</workbook>");
 
     // Workbook-level parts.
-    let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &pivots.number_formats(wb));
+    let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &pivots.number_formats(wb), std::mem::take(&mut out.num_fmts));
     pivots.finish(wb, &mut out, &|code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied()));
     out.part("xl/styles.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"), styles.into_bytes());
     wb_rels.add("styles", "styles.xml");
@@ -431,11 +448,12 @@ fn write_sheets(
     out: &mut Out,
     active: usize,
     wb_rels: &mut Rels,
-) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter) {
+) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter, Vec<usize>) {
     // Kept content first: the chart sheets among the worksheets need their relationship ids.
     let kept = crate::passthrough::write_workbook(wb, wb_rels, out);
     let mut pivots = crate::pivot::PivotWriter::default();
     let mut sheets_xml = String::new();
+    let mut sheet_ids = Vec::with_capacity(wb.sheets.len());
     let any_visible = wb.sheets.iter().any(|s| s.visibility == Visibility::Visible);
     let mut ids = crate::passthrough::SheetIds::new(wb, &kept);
     for (i, sheet) in wb.sheets.iter().enumerate() {
@@ -456,19 +474,26 @@ fn write_sheets(
         };
         let name: String = sheet.name.chars().take(31).collect();
         let sheet_id = ids.take(sheet.file_id);
+        sheet_ids.push(sheet_id as usize);
         let _ = write!(sheets_xml, "<sheet name=\"{}\" sheetId=\"{sheet_id}\"{state} r:id=\"{rid}\"/>", esc_attr(&name));
     }
     sheets_xml.push_str(&kept.sheet_entries(wb.sheets.len(), true, &mut ids));
 
-    (sheets_xml, kept, pivots)
+    (sheets_xml, kept, pivots, sheet_ids)
 }
 
-fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, chart_names: &[String]) -> String {
+fn write_defined_names(
+    wb: &Workbook,
+    kept: &crate::passthrough::WorkbookKept,
+    chart_names: &[String],
+    slicers: &crate::slicer::SlicerWriter,
+) -> String {
     // Defined names, then print areas and titles.
     let mut names = String::new();
     let mut seen = std::collections::HashSet::new();
     for n in &wb.names {
-        if n.name.is_empty() || !seen.insert((n.name.to_ascii_lowercase(), n.scope)) {
+        // A slicer cache's name is written with its cache.
+        if n.name.is_empty() || (n.scope.is_none() && slicers.is_cache_name(&n.name)) || !seen.insert((n.name.to_ascii_lowercase(), n.scope)) {
             continue;
         }
         if let Some(sc) = n.scope
@@ -524,8 +549,13 @@ fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, c
         }
     }
 
+    names.push_str(&slicers.defined_names());
     names
 }
 
 /// Cell metadata declaring dynamic-array formulas (MS-XLSX `XLDAPR`).
 const METADATA: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<metadata xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\"><metadataTypes count=\"1\"><metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\" cellMeta=\"1\"/></metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk></futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata></metadata>";
+/// Writes a workbook with a caller-supplied file name and the default function facts.
+pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+    write_xlsx_named_with(wb, kind, book_name, FunctionInfo::default())
+}

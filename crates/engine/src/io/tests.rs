@@ -481,9 +481,80 @@ fn delimited_exports_preserve_general_precision_and_explicit_number_formats() {
     sheet.set_cell(CellRef::new(0, 0), Cell { value: Value::Number(124412140710.0), ..Default::default() });
     sheet.set_cell(CellRef::new(0, 1), Cell { value: Value::Number(1.23456789012345), ..Default::default() });
     sheet.set_cell(CellRef::new(0, 2), Cell { value: Value::Number(124412140710.0), style: scientific, ..Default::default() });
+    // Every integer below 1e16 that f64 holds (also 2^53 and the even integers above it) keeps
+    // every digit; larger numbers keep the shortest digits that read back as the same value,
+    // and a number `&` would write with an exponent is written out in full, so reopening the
+    // file can't give it a scientific format that then rounds it on the next save.
+    let cells = [
+        (1234567890123456.0, "1234567890123456"),
+        (-9007199254740991.0, "-9007199254740991"),
+        (9007199254740992.0, "9007199254740992"),
+        (9007199254740994.0, "9007199254740994"),
+        (9123456789012346.0, "9123456789012346"),
+        (-9999999999999998.0, "-9999999999999998"),
+        (12345678901234567.0, "12345678901234568"),
+        (1e20, "100000000000000000000"),
+        (1e15 - 0.5, "999999999999999.5"),
+        (1.0 / 3.0 * 1e-6, "0.000000333333333333333"),
+        (1.23456789012346e-10, "0.000000000123456789012346"),
+    ];
+    for (col, (n, _)) in cells.iter().enumerate() {
+        sheet.set_cell(CellRef::new(0, col as u32 + 3), Cell { value: Value::Number(*n), ..Default::default() });
+    }
     for (path, separator) in [("data.csv", ","), ("data.tsv", "\t")] {
         let output = String::from_utf8(save_bytes(&workbook, path).unwrap()).unwrap();
-        assert_eq!(output, format!("124412140710{separator}1.23456789012345{separator}1.24E+11\r\n"));
+        let tail: Vec<&str> = cells.iter().map(|(_, text)| *text).collect();
+        assert_eq!(output, format!("124412140710{s}1.23456789012345{s}1.24E+11{s}{}\r\n", tail.join(separator), s = separator));
+        // Reopening the file and saving it again changes nothing.
+        let (reopened, _) = open_bytes(path, output.as_bytes()).unwrap();
+        assert_eq!(String::from_utf8(save_bytes(&reopened, path).unwrap()).unwrap(), output);
+    }
+}
+
+/// A number shown as General is written as `&` converts it (15 significant digits), whatever
+/// colour, sections or literals the format adds, and in a Text cell. Excel writes the cell
+/// display (`1.24412E+11`, `0.333333333`); GridCraft keeps the digits so part codes survive
+/// (integers below 1e16 keep all their digits, and nothing gets an exponent; see the test above).
+#[test]
+fn delimited_exports_write_general_numbers_as_text_converts_them() {
+    use gridcraft_core::Value;
+    use gridcraft_model::{Cell, NumFmt, StyleId};
+    let mut wb = Workbook::new();
+    let mut styled = |code: &str| wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new(code));
+    let (blue, signed, red, text, unit) =
+        (styled("[Blue]General"), styled("General;-General"), styled("General;[Red]-General"), styled("@"), styled("General\" mm\""));
+    let code = 124412140710.0;
+    let sh = wb.sheet_mut(0).unwrap();
+    let cells = [
+        (Value::Number(1.0 / 3.0), StyleId::DEFAULT),
+        (Value::Number(0.1 + 0.2), StyleId::DEFAULT),
+        (Value::Number(1e20), StyleId::DEFAULT),
+        (Value::Number(code), blue),
+        (Value::Number(9007199254740994.0), blue),
+        (Value::Number(-1.0 / 3.0), blue),
+        (Value::Number(-code), signed),
+        (Value::Number(-code), red),
+        (Value::Number(code), text),
+        (Value::Number(code), unit),
+    ];
+    for (col, (value, style)) in cells.into_iter().enumerate() {
+        sh.set_cell(CellRef::new(0, col as u32), Cell { value, formula: None, style });
+    }
+    for (path, sep) in [("out.csv", ","), ("out.txt", "\t")] {
+        let output = String::from_utf8(save_bytes(&wb, path).unwrap()).unwrap();
+        let expected = [
+            "0.333333333333333",
+            "0.3",
+            "100000000000000000000",
+            "124412140710",
+            "9007199254740994",
+            "-0.333333333333333",
+            "-124412140710",
+            "-124412140710",
+            "124412140710",
+            "124412140710 mm",
+        ];
+        assert_eq!(output, format!("{}\r\n", expected.join(sep)));
     }
 }
 
@@ -560,4 +631,23 @@ fn content_wins_over_a_mismatched_extension() {
         let (opened, _) = open_bytes(name, b"a,b\n1,2\n").unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(opened.sheet(0).unwrap().value(CellRef::new(0, 1)), gridcraft_core::Value::text("b"), "{name}");
     }
+}
+
+/// #1446: File › Open honours Excel's `sep=` first line; saved again, the file opens in the same
+/// columns. A `.txt` file is read with tabs, so its `sep=` line stays data.
+#[test]
+fn csv_open_honours_a_sep_line_and_saves_a_file_that_reopens_in_columns() {
+    let (wb, _) = open_bytes("parts.csv", b"sep=|\r\nPart|Note\r\n1|a,b\r\n").unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let text = |a: &str| sh.value(CellRef::parse(a).unwrap()).as_text().map(str::to_string);
+    assert_eq!((text("A1"), text("B1"), text("B2")), (Some("Part".into()), Some("Note".into()), Some("a,b".into())));
+    let saved = save_bytes(&wb, "parts.csv").unwrap();
+    assert_eq!(String::from_utf8(saved.clone()).unwrap(), "Part,Note\r\n1,\"a,b\"\r\n");
+    let (again, _) = open_bytes("parts.csv", &saved).unwrap();
+    assert_eq!(again.sheet(0).unwrap().value(CellRef::parse("B2").unwrap()).as_text(), Some("a,b"));
+    // `sep=;` keeps its semicolons, as a semicolon file does.
+    let (semi, _) = open_bytes("semi.csv", b"sep=;\r\na;b\r\n").unwrap();
+    assert_eq!(save_bytes(&semi, "semi.csv").unwrap(), b"a;b\r\n");
+    let (txt, _) = open_bytes("list.txt", b"sep=|\r\na\tb\r\n").unwrap();
+    assert_eq!(txt.sheet(0).unwrap().value(CellRef::new(0, 0)).as_text(), Some("sep=|"));
 }

@@ -223,8 +223,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark Mode" => "Donkere modus",
         "Display theme" => "Weergavethema",
         "Animations" => "Animaties",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "De selectierand naar de nieuwe cel laten glijden in plaats van erheen springen"
+        "Animation effects" => "Animatie-effecten",
+        "Use system setting" => "Systeeminstelling gebruiken",
+        "Animation effects|On" => "Aan",
+        "Animation effects|Off" => "Uit",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Vloeiend schuiven en zoomen, en een selectierand die naar de nieuwe cel glijdt"
         }
         "System" => "Systeem",
         "Light" => "Licht",
@@ -277,6 +281,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "Automatiseren",
         "Table Design" => "Tabelontwerp",
         "Chart Design" => "Grafiekontwerp",
+        "Pareto" => "Pareto",
+        "Cumulative %" => "Cumulatief %",
         "Ready" => "Gereed",
         "Enter" => "Invoeren",
         "Edit" => "Bewerken",
@@ -300,10 +306,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More Number Formats…" => "Meer getalnotaties…",
         "Financial" => "Financieel",
         "Logical" => "Logisch",
-        "Date &\nTime" => "Datum en\ntijd",
-        "Lookup &\nReference" => "Zoeken en\nverwijzen",
-        "Math &\nTrig" => "Wiskunde en\ntrigonometrie",
-        "More\nFunctions" => "Meer\nfuncties",
+        "Date & Time" => "Datum en tijd",
+        "Lookup & Reference" => "Zoeken en verwijzen",
+        "Math & Trig" => "Wiskunde en trigonometrie",
+        "More Functions" => "Meer functies",
         "Sheet Options|View" => "Weergeven",
         "Print" => "Afdrukken",
         "Print What" => "Wat afdrukken",
@@ -344,6 +350,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Opslaan",
         "Save As" => "Opslaan als",
         "Export" => "Exporteren",
+        "Minimize" => "Minimaliseren",
+        "Maximize" => "Maximaliseren",
+        "Restore Down" => "Vorig formaat",
         "Close" => "Sluiten",
         "Options" => "Opties",
         "Blank workbook" => "Lege werkmap",

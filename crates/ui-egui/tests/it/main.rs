@@ -8,6 +8,7 @@ mod common;
 
 mod accounting_fill;
 mod advanced_filter;
+mod animation_effects;
 mod argument_names;
 mod autosave_persist;
 mod borders;
@@ -47,6 +48,7 @@ mod formula_locale;
 mod formula_point_headers;
 mod formula_popup;
 mod freeze_handles;
+mod function_library;
 mod go_to_dialog;
 mod header_autofit;
 mod header_column_drag;

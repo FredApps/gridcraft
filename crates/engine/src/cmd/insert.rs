@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Chart",
             ["Insert", "Charts"],
             None,
-            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\", width?, height?}",
+            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|pareto|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\", width?, height?}",
             has_doc,
             insert_chart
         ),
@@ -171,7 +171,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open Hyperlink",
             [],
             None,
-            "{url?: \"https://…\" | \"mailto:…\" | \"Sheet2!A1\", cell?} (default: the cell's link); only http, https and mailto are opened, any other scheme is an error; the UI asks before opening",
+            "{url?: \"https://…\" | \"mailto:…\" | \"Sheet2!A1\", cell?} (default: the cell's link); a reference selects; a web or e-mail address is an error unless the host allows it: the user opens those by clicking the link and confirming; any scheme but http, https and mailto is always an error",
             has_doc,
             open_link
         ),
@@ -309,6 +309,13 @@ fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
             cx.structural = true;
             RangeRef::new(r.start, CellRef::new((r.end.row + 1).min(MAX_ROWS - 1), r.end.col))
         };
+        let sh = cx.sheet_mut(sheet)?;
+        // As in Excel, the table unmerges the merged cells it covers: a table can't hold them.
+        let merged = sh.merges.len();
+        sh.merges.retain(|m| !m.intersects(&r));
+        if sh.merges.len() != merged {
+            cx.structural = true;
+        }
         let sh = cx.sheet_mut(sheet)?;
         let mut names: Vec<String> = Vec::new();
         // Lower-case names taken, and the next suffix for each header, so that thousands of equal
@@ -596,6 +603,7 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
         ("bubble", _) => ChartKind::Bubble,
         ("radar", _) => ChartKind::Radar,
         ("histogram", _) => ChartKind::Histogram,
+        ("pareto", _) => ChartKind::Pareto,
         ("waterfall", _) => ChartKind::Waterfall,
         ("funnel", _) => ChartKind::Funnel,
         ("treemap", _) => ChartKind::Treemap,
@@ -818,7 +826,11 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         },
         title,
         series,
-        legend: if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) { LegendPos::Right } else { LegendPos::Bottom },
+        legend: match kind {
+            ChartKind::Pie | ChartKind::Doughnut => LegendPos::Right,
+            ChartKind::Pareto => LegendPos::None,
+            _ => LegendPos::Bottom,
+        },
         data_labels: false,
         gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
         style: 1,

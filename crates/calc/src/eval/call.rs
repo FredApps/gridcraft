@@ -399,17 +399,17 @@ impl<'h> Evaluator<'h> {
         self.aggregate_value(kind, value, true, acc)
     }
 
-    /// Adds one argument's value by calling `SUM` and `COUNT` on it, so coercion and error rules
-    /// stay in one place (`AVERAGE` of an argument is its `SUM` over its `COUNT`).
+    /// Adds one argument's numbers and counts them with COUNT. SUM snaps only its last
+    /// addition, while AVERAGE keeps the ordinary left-to-right sum.
     fn aggregate_value(&mut self, kind: Agg, value: Value, from_ref: bool, acc: &mut Acc) -> Result<(), Ev> {
-        let (Some(sum), Some(count)) = (gridcraft_functions::lookup("SUM"), gridcraft_functions::lookup("COUNT")) else {
+        let Some(count) = gridcraft_functions::lookup("COUNT") else {
             return Err(err(CellError::Name));
         };
         let args = [Arg { value, from_ref }];
         if kind != Agg::Count {
-            match gridcraft_functions::call(sum, &args, &mut FnCtx { ev: self, criteria: None, lambda: None }) {
-                Value::Number(n) => acc.sum += n,
-                other => return Err(Ev::V(other)),
+            match gridcraft_functions::numbers(&args) {
+                Ok(ns) => ns.into_iter().for_each(|n| acc.add(n)),
+                Err(e) => return Err(err(e)),
             }
         }
         if kind != Agg::Sum {

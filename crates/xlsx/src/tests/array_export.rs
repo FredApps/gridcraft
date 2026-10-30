@@ -164,7 +164,7 @@ fn scalar_formulas_constants_and_legacy_cse_do_not_require_dynamic_metadata() {
 #[test]
 fn legacy_index_match_formulas_remain_scalar_after_xlsx_roundtrip() {
     let source = super::minimal(
-        r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>a</t></is></c><c r="B1"><v>0.1</v></c><c r="D1" t="inlineStr"><is><t>c</t></is></c><c r="E1" t="inlineStr"><is><t>x</t></is></c><c r="F1"><f>INDEX($B$1:$B$3,MATCH(D1,$A$1:$A$3,0))</f><v>0.7</v></c><c r="F3" t="str"><f>IF(E1=&quot;&quot;,&quot;&quot;,INDEX($B$1:$B$3,MATCH(D1,$A$1:$A$3,0)))</f><v>0.7</v></c><c r="F5"><f>VLOOKUP(D1,$A$1:$B$3,2,FALSE)</f><v>0.7</v></c><c r="F6"><f>SUM($B$1:$B$3)</f><v>1.2</v></c><c r="F7"><f>MATCH(D1,$A$1:$A$3,0)</f><v>3</v></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>b</t></is></c><c r="B2"><v>0.4</v></c><c r="F2"><f>IFERROR(INDEX($B$1:$B$3,MATCH(D1,$A$1:$A$3,0)),0)</f><v>0.7</v></c></row><row r="3"><c r="A3" t="inlineStr"><is><t>c</t></is></c><c r="B3"><v>0.7</v></c></row></sheetData>"#,
+        r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>a</t></is></c><c r="B1"><v>0.1</v></c><c r="D1" t="inlineStr"><is><t>c</t></is></c><c r="E1" t="inlineStr"><is><t>x</t></is></c><c r="F1"><f>INDEX($B$1:$B$3,MATCH(D1,$A$1:$A$3,0))</f><v>0.7</v></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>b</t></is></c><c r="B2"><v>0.4</v></c><c r="F2"><f>IFERROR(INDEX($B$1:$B$3,MATCH(D1,$A$1:$A$3,0)),0)</f><v>0.7</v></c></row><row r="3"><c r="A3" t="inlineStr"><is><t>c</t></is></c><c r="B3"><v>0.7</v></c><c r="F3" t="str"><f>IF(E1=&quot;&quot;,&quot;&quot;,INDEX($B$1:$B$3,MATCH(D1,$A$1:$A$3,0)))</f><v>0.7</v></c></row><row r="5"><c r="F5"><f>VLOOKUP(D1,$A$1:$B$3,2,FALSE)</f><v>0.7</v></c></row><row r="6"><c r="F6"><f>SUM($B$1:$B$3)</f><v>1.2</v></c></row><row r="7"><c r="F7"><f>MATCH(D1,$A$1:$A$3,0)</f><v>3</v></c></row></sheetData>"#,
         &[],
         "",
         "",
@@ -333,11 +333,22 @@ fn implicit_intersection_metadata_respects_function_argument_context() {
             ("SUM(A1:A3)", false),
             ("SUMPRODUCT(A1:A3*B1:B3)", false),
             ("SUMPRODUCT(SQRT(A1:A3))", false),
-            // An explicit `@` is written as `_xlfn.SINGLE`, a dynamic-array formula. Dropping it
-            // instead would need the reader to put it back on legacy formulas.
-            ("SQRT(@A1:A3)", true),
-            ("@A1:A3*2", true),
+            // An `@` that legacy Excel implies is dropped (the reader puts it back), and so is one
+            // of a range an edit made one cell (`SQRT(@A1:A1)` after deleting rows under
+            // `SQRT(@A1:A3)`). An `@` of one value stays as `_xlfn.SINGLE` in a legacy formula, as
+            // Excel writes it; any other `@` makes the formula a dynamic-array one.
+            ("SQRT(@A1:A3)", false),
+            ("@A1:A3*2", false),
             ("@(A1:A3*2)", true),
+            ("SQRT(@A1)", false),
+            ("SQRT(@A1:A1)", false),
+            ("@SUM(A1:A3)", false),
+            ("SUMPRODUCT(@ROW(A1:A3))", true),
+            ("SUMPRODUCT(@SQRT(A1:A3))", true),
+            // Legacy Excel intersects IFERROR's and IFNA's arguments inside SUMPRODUCT; dynamic-array
+            // Excel evaluates them as arrays.
+            ("SUMPRODUCT(IFERROR(VALUE(A1:A3),0))", true),
+            ("SUMPRODUCT(IFNA(A1:A3,0))", true),
             ("SQRT(INDIRECT(\"A1\"))", false),
             ("SUM(INDIRECT(\"A1:A3\"))", false),
             ("SQRT(INDIRECT(\"A1:A3\"))", true),
@@ -479,4 +490,25 @@ fn long_flat_chains_are_scalar_formulas() {
     // A range anywhere in the chain still needs array evaluation.
     assert_dynamic(&sheet, "B4", "B4");
     assert_eq!(cell(&sheet, "B1").child("f").unwrap().text, refs);
+}
+
+#[test]
+fn spilled_text_is_written_as_a_cached_string_not_a_shared_string() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let mut anchor = Cell::formula(Formula::new("SORT({\"b\";\"a\";\"c\"})"));
+    anchor.value = Value::text("a");
+    sh.cells.set(at("K4"), anchor);
+    sh.spill_ranges.insert(at("K4"), range("K4:K6"));
+    sh.spill.insert(at("K5"), Value::text("b"));
+    sh.spill.insert(at("K6"), Value::text("c"));
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    for (address, text) in [("K4", "a"), ("K5", "b"), ("K6", "c")] {
+        let c = cell(&sheet, address);
+        assert_eq!(c.attr("t"), Some("str"), "{address}");
+        assert_eq!(c.child("v").unwrap().text, text, "{address}");
+    }
 }

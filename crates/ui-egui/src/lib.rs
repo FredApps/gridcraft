@@ -32,6 +32,7 @@ mod floating_pictures;
 pub mod fonts;
 pub mod formula_bar;
 mod formula_locale;
+pub mod function_library;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
@@ -39,6 +40,7 @@ pub mod keymap;
 pub mod keytips;
 pub mod macro_editor;
 pub mod macro_ui;
+pub mod motion;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -75,6 +77,33 @@ pub use services::{Chrome, Inbox, Services};
 pub use state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
 pub mod desktop_theme;
 
+fn parse_resize_direction(value: &str) -> Option<egui::ResizeDirection> {
+    match value {
+        "north" => Some(egui::ResizeDirection::North),
+        "south" => Some(egui::ResizeDirection::South),
+        "east" => Some(egui::ResizeDirection::East),
+        "west" => Some(egui::ResizeDirection::West),
+        "northeast" => Some(egui::ResizeDirection::NorthEast),
+        "northwest" => Some(egui::ResizeDirection::NorthWest),
+        "southeast" => Some(egui::ResizeDirection::SouthEast),
+        "southwest" => Some(egui::ResizeDirection::SouthWest),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod viewport_command_tests {
+    use super::parse_resize_direction;
+
+    #[test]
+    fn resize_direction_parser_accepts_all_edges_and_rejects_unknown_values() {
+        for name in ["north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest"] {
+            assert!(parse_resize_direction(name).is_some(), "{name}");
+        }
+        assert!(parse_resize_direction("middle").is_none());
+    }
+}
+
 /// Persisted UI preferences.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -86,8 +115,12 @@ pub struct UiState {
     pub ribbon_collapsed: bool,
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
-    /// Motion in the UI: the selection outline glides to a new selection (View ▸ Animations).
-    pub animations: bool,
+    /// Animation effects (File ▸ Options, View ▸ Animations): on, off, or following the system's
+    /// setting (see [`motion`]). Saved as `animationEffects`. The checkbox this replaced saved a
+    /// boolean under `animations`; that is still read (unticked means Off) but no longer written,
+    /// so an older GridCraft sharing `ui.json` can still read the file.
+    #[serde(rename = "animationEffects", alias = "animations", deserialize_with = "motion::lenient")]
+    pub animations: motion::Animations,
     /// Enable AutoComplete for cell values (File ▸ Options ▸ Editing): typed text is completed
     /// from the one matching entry in the same column.
     pub autocomplete: bool,
@@ -135,7 +168,7 @@ impl Default for UiState {
             ribbon_collapsed: false,
             formula_bar_expanded: false,
             status_bar: true,
-            animations: true,
+            animations: motion::Animations::System,
             autocomplete: true,
             autosave: false,
             recent: vec![],
@@ -251,6 +284,10 @@ pub struct SheetApp {
     desktop_theme: desktop_theme::DesktopTheme,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
     desktop_dark: Option<bool>,
+    /// What the system last said about its animation effects ([`Services::animations_enabled`]).
+    system_animations: Option<bool>,
+    /// egui's own animation settings while Animation effects has them off ([`motion::apply`]).
+    egui_motion: Option<motion::EguiMotion>,
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,
@@ -284,6 +321,9 @@ pub struct SheetApp {
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
+    /// Linux/BSD frameless windows draw their own caption and resize controls.
+    pub window_controls: bool,
+    viewport_commands: Vec<egui::ViewportCommand>,
     /// View › Switch Windows opens its list on the next frame the View tab draws (asked for by a
     /// key tip, the command search or a menu, possibly while another tab was showing).
     pub(crate) open_switch_windows: bool,
@@ -305,6 +345,9 @@ pub struct SheetApp {
 
 /// Strips the engine's error prefixes for message boxes.
 pub fn clean_error(e: &str) -> String {
+    if let Some(rest) = e.strip_prefix("command `").and_then(|s| s.split_once("` is not available right now: ")).map(|(_, message)| message) {
+        return rest.to_string();
+    }
     if let Some(rest) = e.split_once("`: ").map(|(_, r)| r) {
         return rest.to_string();
     }

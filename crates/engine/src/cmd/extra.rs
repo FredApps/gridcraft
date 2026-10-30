@@ -232,15 +232,19 @@ pub fn specs() -> Vec<CommandSpec> {
             new_script
         ),
         cmd!(query "automate.allScripts", "All Scripts", ["Automate", "Scripting Tools"], None, "{} → saved scripts", has_doc, all_scripts),
-        cmd!(
-            "automate.runScript",
-            "Run Script",
-            [],
-            None,
-            "{name, trusted?: bool (runs a script from an untrusted workbook this once)} — refuses scripts in a workbook opened from a file until it is trusted, and steps that reach outside the workbook (file.*, link.*, any `path` param)",
-            has_doc,
-            run_script
-        ),
+        // Not journaled itself: the steps it runs are, so the journal and a recording taken while
+        // a script runs hold each step once (and still replay after the script is deleted).
+        CommandSpec {
+            id: "automate.runScript",
+            label: "Run Script",
+            menu: &[],
+            shortcut: None,
+            params: "{name, trusted?: bool (runs a script from an untrusted workbook this once)} — refuses scripts in a workbook opened from a file until it is trusted, and steps that reach outside the workbook (file.*, link.*, any `path` param)",
+            enabled: has_doc,
+            run: run_script,
+            journal: false,
+            undoable: true,
+        },
         cmd!(
             noundo "automate.trustScripts",
             "Trust Scripts",
@@ -310,7 +314,7 @@ pub fn specs() -> Vec<CommandSpec> {
             new_cell_style
         ),
         cmd!(query "home.addIns", "Add-ins", ["Home", "Add-ins"], None, "{} → GridCraft extends through MCP and scripts instead of add-ins", always, |_, _| Ok(json!({"addIns": [], "hint": "Use gridcraft-cli mcp or Automate › scripts"}))),
-        cmd!(query "formulas.recentlyUsed", "Recently Used", ["Formulas", "Function Library"], None, "{} → recently used functions in this workbook", has_doc, recently_used),
+        cmd!(query "formulas.recentlyUsed", "Recently Used", ["Formulas", "Function Library"], None, "{} → the functions most recently entered in formulas, newest first", has_doc, recently_used),
         cmd!(query "formulas.financial", "Financial", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Financial"}))),
         cmd!(query "formulas.logical", "Logical", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Logical"}))),
         cmd!(query "formulas.text", "Text", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Text"}))),
@@ -364,4 +368,33 @@ pub const CHECKBOX_FORMAT: &str = "\"☐\";\"☐\";\"☐\";[=1]\"☑\"";
 /// Copy of the params that is always a JSON object, so keys can be assigned; any other JSON value counts as no params (like null).
 fn object_params(p: &Json) -> Json {
     Json::Object(p.as_object().cloned().unwrap_or_default())
+}
+
+/// Normal, Page Layout and Page Break Preview belong to the window, not to the edits: Excel doesn't
+/// undo a switch between them, and `set_view` is no undo step. So undo and redo keep each sheet's
+/// current view when they swap in another snapshot of the workbook, and a view kept this way
+/// doesn't make a saved workbook dirty.
+pub(crate) fn keep_view_modes(d: &mut crate::DocState, now: &Workbook) {
+    // Sheets have no stable id. A name missing from `now` is a rename being undone or redone, which
+    // keeps the sheet count and position: the sheet is the one at the same index, under a name the
+    // restored snapshot doesn't have.
+    let renamed = |i: usize| {
+        (now.sheets.len() == d.wb.sheets.len()).then(|| now.sheets.get(i)).flatten().filter(|sh| !d.wb.sheets.iter().any(|s| s.name == sh.name))
+    };
+    let current = |i: usize, name: &str| now.sheets.iter().find(|sh| sh.name == name).or_else(|| renamed(i)).map(|sh| sh.view);
+    let changed: Vec<(usize, SheetViewMode)> =
+        d.wb.sheets.iter().enumerate().filter_map(|(i, sh)| current(i, &sh.name).filter(|v| *v != sh.view).map(|v| (i, v))).collect();
+    if changed.is_empty() {
+        return;
+    }
+    let dirty = d.is_dirty();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    for (i, v) in changed {
+        if let Some(sh) = wb.sheet_mut(i) {
+            sh.view = v;
+        }
+    }
+    if !dirty {
+        d.saved = d.wb.clone();
+    }
 }

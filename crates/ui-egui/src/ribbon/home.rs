@@ -469,7 +469,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             if s {
                 act(app, "formulas.autoSum", json!({}));
             }
-            egui::Popup::menu(&sa).show(|ui| autosum_menu(app, ui));
+            egui::Popup::menu(&sa).show(|ui| crate::function_library::auto_sum_menu(app, ui));
         });
         let fill = small_button(ui, Icon::FillDown, "", "Fill", true);
         for sequence in keytip_table::group_extension(
@@ -564,21 +564,10 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
 
 /// The AutoSum menu (Home › Editing and Formulas › Function Library): a function, or the Insert
 /// Function dialog.
-pub(super) fn autosum_menu(app: &mut SheetApp, ui: &mut Ui) {
-    for f in ["SUM", "AVERAGE", "COUNT", "MAX", "MIN"] {
-        if ui.button(f).clicked() {
-            act(app, "formulas.autoSum", json!({"function": f}));
-        }
-    }
-    ui.separator();
-    if ui.button("More Functions…").clicked() {
-        app.open_dialog("insertFunction", json!({}));
-    }
-}
 
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let name = st.font.name.clone();
-    let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))));
+    let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))).right_text(()));
     control_keytip(app, ui, &resp, "home.fontName");
     let forced = invoke(app, "home.fontName");
     let items: Vec<(&str, String)> = FONTS.iter().map(|f| (*f, f.to_string())).collect();

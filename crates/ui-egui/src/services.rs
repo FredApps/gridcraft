@@ -41,6 +41,8 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<PrintPdf>,
+    /// The system animation setting, read from the host's cached answer each frame.
+    pub animations_enabled: Option<Box<dyn Fn() -> Option<bool>>>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).

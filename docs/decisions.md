@@ -26,9 +26,9 @@ GridCraft evaluates ordinary formulas with array semantics even when the final r
 
 The exporter inspects the parsed formula without evaluating it. It distinguishes range-taking functions such as `SUM` from scalar arguments and operators: `SUM(A1:A3)` and `A1*2` stay ordinary, while `SUM(A1:A3*B1:B3)` and `SQRT(A1:A3)` retain array evaluation. Legacy array-aware contexts such as `SUMPRODUCT` do not need an extra marker. Explicit `@` scalarizes its result without hiding array-sensitive operations inside it.
 
-Names are resolved using workbook/sheet scope, and structured references distinguish one table-row cell from a column. Literal `INDIRECT` and `INDEX` arguments permit tighter classification; unresolved reference dimensions are conservatively treated as potentially multiple cells. Name/AST traversal is bounded, with array preservation as the fallback. This is an export classifier, not a claim of exact Excel metadata parity for every function or user-defined function. It stays within the format crate's existing dependencies and does not change calculation or import behavior.
+Names are resolved using workbook/sheet scope, and structured references distinguish one table-row cell from a column. Literal `INDIRECT` and `INDEX` arguments permit tighter classification; unresolved reference dimensions are conservatively treated as potentially multiple cells. Name/AST traversal is bounded. A formula whose array behaviour the analysis doesn't know (a user-defined or unknown function, an uncertain parameter, a recursive name) is saved with `cm`, unless it has an explicit `@` (below). One without an explicit `@` that the analysis cannot finish, but whose parts are all known, is saved as read, without `cm`. One with an explicit `@` that the analysis cannot finish or doesn't know is saved as the legacy text the reader turns back into it (the formula without its `@`, or without a whole-formula `@`) when there is one, and with `cm` otherwise. This is an export classifier, not a claim of exact Excel metadata parity for every function or user-defined function. It stays within the format crate's existing dependencies.
 
-This is a writer policy; interpreting implicit intersection in imported legacy formulas remains separate work. See Microsoft's [Formula vs. Formula2 documentation](https://learn.microsoft.com/en-us/office/vba/excel/concepts/cells-and-ranges/range-formula-vs-formula2).
+The reader applies the same classification in reverse: a formula without dynamic-array metadata (`cm`) and not entered as a CSE array is a legacy formula, and gets the `@` Excel implies where a range meets a single-value parameter, an operator or the cell result. Inside SUMPRODUCT and other array-evaluating parameters, IF's condition and IFERROR's and IFNA's arguments are still intersected, as legacy Excel does without Ctrl+Shift+Enter; IF's results are not. The writer drops an `@` that legacy Excel would imply (also when an edit has shrunk its range to one cell) and saves that formula without `cm`; an `@` of a single value stays `_xlfn.SINGLE` in that legacy formula, as Excel writes it; any other `@` makes the formula a dynamic-array one. A legacy formula too large to analyse, or using functions whose legacy argument semantics are unknown (the array arguments of dynamic-array functions, LAMBDA), is read as it is with only a whole-formula `@` when its result may be several values, so it never spills, and is saved as it was read, without `cm`. Which names are built-in functions and which parameters take a single value comes from the function library, which the format crate may not depend on: the caller passes a `gridcraft_xlsx::FunctionInfo` (`read_xlsx_with`, `write_xlsx_with`; the engine supplies the library's answers), and `read_xlsx`/`write_xlsx`/`write_xlsx_as` use the crate's own table alone. See Microsoft's [Formula vs. Formula2 documentation](https://learn.microsoft.com/en-us/office/vba/excel/concepts/cells-and-ranges/range-formula-vs-formula2).
 
 ## Static cell pictures
 
@@ -66,9 +66,10 @@ limits, which are never skipped: 121% out goes to 100%, and 99% or 101% towards 
 The wheel's turning is counted in notches (egui eases each notch in over several frames, and
 fine-grained wheels send parts of one); a notch steps once 60% of it has turned. With animations
 on, the zoom then glides to the step over about a tenth of a second (as egui eases a scroll notch),
-and a notch turned during a glide steps on from the step it's going to. With View › Animations off
-it goes to the step at once. Whether the zoom glide should have a setting of its own is left to the
-maintainers.
+and a notch turned during a glide steps on from the step it's going to. With Animation effects off
+(File › Options: chosen there, or the system's own setting while the preference follows it) the
+notch isn't eased in either, so the zoom is on its step in the frame the wheel turned. Whether the
+zoom glide should have a setting of its own is left to the maintainers.
 
 Before, each frame multiplied the whole-number zoom by egui's eased factor and rounded, so a notch
 out never undid a notch in (100 → 122 → 101 → 123 → 102). Keeping the zoom unrounded fixed that
@@ -80,3 +81,24 @@ relative steps keep each notch feeling the same, and the doublings land on 25, 5
 400%. The status bar's Zoom In / Zoom Out buttons and Ctrl+Alt+= / Ctrl+Alt+- keep their 10%
 steps, so the wheel and the buttons now step differently. Whether they should share one ladder
 (this one, Excel's, or another) is left to the maintainers.
+## CSV: Excel's `sep=` first line (#1446)
+
+A CSV file whose first line is `sep=` plus one character is split at that character when File ›
+Open detects the delimiter, and the line isn't data. Observed in Excel 16.0 (build 17932, Windows)
+opening synthetic files: spaces anywhere in the line are ignored (`sep= |`, ` sep=|  `), case
+doesn't matter, the line may be quoted as a whole field, and a BOM before it is fine. `sep=` with
+nothing after it (or only spaces) is dropped and nothing is split; a non-ASCII character is dropped
+the same way. Two characters after `=` (a tab counts, `sep=|<tab>`), or the line anywhere but first,
+is data. `sep="` splits at the quotes, so nothing is quoted. (#1446 measured `sep=` alone as data in
+Excel for Microsoft 365, de-DE; this build drops it.)
+
+A delimiter given by the caller wins and the line stays data, so a `.tsv`/`.txt` file (read with
+tabs) keeps it. Saving: Excel writes its list separator and drops the line. GridCraft saves a CSV
+with the separator it was read with, so it keeps a named `,` `;` or tab only when detection picks
+it again on reopening; otherwise (`|`, or `sep=;` over text with as many commas) it saves commas,
+which reopen in the same columns. A first row that would itself read as a `sep=` line (a lone
+`sep=;` cell) is written behind a `sep=` line naming the delimiter, so it stays data. Excel writes
+such a row bare (`"sep=;";`) and reopens the file garbled (observed: A1 `sep=;;`, row 2 in one cell).
+
+From Text/CSV still guesses its own delimiter; making it detect like File › Open (and so honour
+`sep=`) is another part of #1446.

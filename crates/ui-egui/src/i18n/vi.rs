@@ -226,8 +226,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark Mode" => "Chế độ tối",
         "Display theme" => "Chủ đề hiển thị",
         "Animations" => "Hiệu ứng động",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Trượt khung vùng chọn tới ô bạn di chuyển đến thay vì nhảy ngay tới đó"
+        "Animation effects" => "Hiệu ứng hoạt ảnh",
+        "Use system setting" => "Dùng cài đặt hệ thống",
+        "Animation effects|On" => "Bật",
+        "Animation effects|Off" => "Tắt",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Cuộn và thu phóng mượt mà, khung vùng chọn trượt tới ô bạn di chuyển đến"
         }
         "System" => "Hệ thống",
         "Light" => "Sáng",
@@ -280,6 +284,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "Tự động hóa",
         "Table Design" => "Thiết kế bảng",
         "Chart Design" => "Thiết kế biểu đồ",
+        "Pareto" => "Pareto",
+        "Cumulative %" => "% tích lũy",
         "Ready" => "Sẵn sàng",
         "Enter" => "Nhập",
         "Edit" => "Sửa",
@@ -303,10 +309,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More Number Formats…" => "Định dạng số khác…",
         "Financial" => "Tài chính",
         "Logical" => "Logic",
-        "Date &\nTime" => "Ngày &\nGiờ",
-        "Lookup &\nReference" => "Tra cứu &\nTham chiếu",
-        "Math &\nTrig" => "Toán &\nLượng giác",
-        "More\nFunctions" => "Hàm\nkhác",
+        "Date & Time" => "Ngày & Giờ",
+        "Lookup & Reference" => "Tra cứu & Tham chiếu",
+        "Math & Trig" => "Toán & Lượng giác",
+        "More Functions" => "Hàm khác",
         "Sheet Options|View" => "Xem",
         "Print" => "In",
         "Print What" => "Nội dung in",
@@ -349,6 +355,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Lưu",
         "Save As" => "Lưu thành",
         "Export" => "Xuất",
+        "Minimize" => "Thu nhỏ",
+        "Maximize" => "Phóng to",
+        "Restore Down" => "Khôi phục",
         "Close" => "Đóng",
         "Options" => "Tùy chọn",
         "Blank workbook" => "Sổ làm việc trống",

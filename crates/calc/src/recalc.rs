@@ -512,11 +512,20 @@ pub fn evaluate(wb: &Workbook, sheet: usize, at: CellRef, formula: &str) -> Valu
 }
 
 pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> Value {
+    evaluate_expr_at(wb, sheet, at, expr, true)
+}
+
+/// Evaluates an inner step without the formula-root snap to zero.
+pub fn evaluate_inner_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> Value {
+    evaluate_expr_at(wb, sheet, at, expr, false)
+}
+
+fn evaluate_expr_at(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr, root: bool) -> Value {
     let exprs = HashMap::default();
     let mut rng = 0x1234_5678_9ABC_DEF0u64;
     let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
     let mut ev = Evaluator::new(&mut host, sheet, at);
-    ev.value(expr)
+    if root { ev.value_root(expr) } else { ev.value(expr) }
 }
 
 fn prof_now() -> f64 {

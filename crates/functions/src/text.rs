@@ -27,30 +27,42 @@ fn check_len(s: String) -> R<Value> {
 }
 
 /// Pushes `piece` onto `out`, failing once the result exceeds the cell limit.
-fn push_capped(out: &mut String, piece: &str) -> R<()> {
+fn push_capped(out: &mut String, piece: &str, over: CellError) -> R<()> {
     out.push_str(piece);
     if out.len() > MAX_TEXT * 4 {
-        return Err(CellError::Value);
+        return Err(over);
     }
     Ok(())
 }
 
+/// CONCATENATE cuts at the cell limit like `&`; CONCAT and TEXTJOIN give `#CALC!` past it.
 fn concatenate(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut out = String::new();
     for x in a {
-        push_capped(&mut out, &scalar(x).to_text()?)?;
+        // Past the budget, later arguments are still converted so their errors propagate.
+        let piece = scalar(x).to_text()?;
+        if out.len() <= MAX_TEXT * 4 {
+            out.push_str(&piece);
+        }
     }
-    check_len(out)
+    text_val(gridcraft_core::cap_text(out))
+}
+
+fn check_calc(s: String) -> R<Value> {
+    if s.len() > MAX_TEXT && s.chars().count() > MAX_TEXT {
+        return Err(CellError::Calc);
+    }
+    text_val(s)
 }
 
 fn concat(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut out = String::new();
     for x in a {
         for v in as_array(&x.value).iter() {
-            push_capped(&mut out, &v.to_text()?)?;
+            push_capped(&mut out, &v.to_text()?, CellError::Calc)?;
         }
     }
-    check_len(out)
+    check_calc(out)
 }
 
 fn textjoin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -69,11 +81,11 @@ fn textjoin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut out = String::new();
     for (i, s) in items.iter().enumerate() {
         if i > 0 && !delims.is_empty() {
-            push_capped(&mut out, &delims[(i - 1) % delims.len()])?;
+            push_capped(&mut out, &delims[(i - 1) % delims.len()], CellError::Calc)?;
         }
-        push_capped(&mut out, s)?;
+        push_capped(&mut out, s, CellError::Calc)?;
     }
-    check_len(out)
+    check_calc(out)
 }
 
 fn count_arg(a: &[Arg], i: usize, default: f64) -> R<usize> {
@@ -334,11 +346,13 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
             if seen_dec {
                 return Err(CellError::Value);
             }
-        } else if c == '.' || c == ',' {
-            return Err(CellError::Value);
         } else {
             out.push(c);
         }
+    }
+    // A leftover `.` can be a decimal point but never a date separator: `1.2.3` is `#VALUE!` in Excel.
+    if out.matches('.').count() > 1 {
+        return Err(CellError::Value);
     }
     let mut n = parse_number_text_in(&out, c.date_system()).ok_or(CellError::Value)?;
     for _ in 0..pct {
@@ -680,7 +694,7 @@ fn arraytotext(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
             } else if c > 0 {
                 out.push_str(if strict { "," } else { ", " });
             }
-            push_capped(&mut out, &value_text(arr.get(r, c).unwrap_or(&Value::Empty), strict))?;
+            push_capped(&mut out, &value_text(arr.get(r, c).unwrap_or(&Value::Empty), strict), CellError::Value)?;
         }
     }
     if strict {
@@ -1094,6 +1108,16 @@ mod tests {
         is_text(ev("TEXTJOIN", vec![t("-"), b(false), av(arr(vec![vec![tv("a"), tv(""), tv("b")]]))]), "a--b");
         is_text(ev("TEXTJOIN", vec![av(row_t(&[",", ";"])), b(true), t("a"), t("b"), t("c")]), "a,b;c");
         is_err(ev("CONCAT", vec![t("a"), e(CellError::NA)]), CellError::NA);
+        // Past 32,767 characters: CONCAT and TEXTJOIN are #CALC!, CONCATENATE cuts like `&`
+        // (checked in Excel: LEN(...) is #CALC!, #CALC! and 32767).
+        let x = || t(&"x".repeat(20_000));
+        is_err(ev("CONCAT", vec![x(), x()]), CellError::Calc);
+        is_err(ev("TEXTJOIN", vec![t(","), b(false), x(), x()]), CellError::Calc);
+        assert_eq!(ev("CONCATENATE", vec![x(), x()]), Value::text("x".repeat(32_767)));
+        assert_eq!(ev("CONCAT", vec![x()]), Value::text("x".repeat(20_000)));
+        // An error after the cut still propagates.
+        let big = || t(&"x".repeat(32_767));
+        is_err(ev("CONCATENATE", vec![big(), big(), big(), big(), big(), e(CellError::NA)]), CellError::NA);
         // Lifting: CONCATENATE over an array.
         assert_eq!(rows_of(&ev("CONCATENATE", vec![av(row_t(&["a", "b"])), t("x")])), vec![vec![tv("ax"), tv("bx")]]);
     }
@@ -1225,8 +1249,17 @@ mod tests {
         close(ev("NUMBERVALUE", vec![t(" 1 000 ")]), 1000.0);
         close(ev("NUMBERVALUE", vec![t("")]), 0.0);
         is_err(ev("NUMBERVALUE", vec![t("1.2.3")]), CellError::Value);
-        is_err(ev("NUMBERVALUE", vec![t("1.5"), t(","), t(" ")]), CellError::Value);
-        is_err(ev("NUMBERVALUE", vec![t("1,5"), t("."), t(" ")]), CellError::Value);
+        // Excel 16 (en-US) swaps the given separators, then parses what is left in the host locale.
+        close(ev("NUMBERVALUE", vec![t("1.5"), t(","), t(" ")]), 1.5);
+        close(ev("NUMBERVALUE", vec![t("1 234.5"), t(","), t(" ")]), 1234.5);
+        close(ev("NUMBERVALUE", vec![t("2.5%"), t(","), t(" ")]), 0.025);
+        close(ev("NUMBERVALUE", vec![t("1.5E3"), t(","), t(" ")]), 1500.0);
+        close(ev("NUMBERVALUE", vec![t("1.5"), t(";")]), 1.5);
+        close(ev("NUMBERVALUE", vec![t("1.5"), t("x")]), 1.5);
+        close(ev("NUMBERVALUE", vec![t("1,5"), t(".")]), 15.0);
+        is_err(ev("NUMBERVALUE", vec![t("12.345,6"), t(","), t(" ")]), CellError::Value);
+        is_err(ev("NUMBERVALUE", vec![t("1.2.3"), t(","), t(" ")]), CellError::Value);
+        is_err(ev("NUMBERVALUE", vec![t("1,5"), t("."), t(".")]), CellError::Value);
         is_text(ev("FIXED", vec![n(1234.567), n(1.0)]), "1,234.6");
         is_text(ev("FIXED", vec![n(1234.567), n(-1.0)]), "1,230");
         is_text(ev("FIXED", vec![n(-1234.567), n(1.0), b(true)]), "-1234.6");

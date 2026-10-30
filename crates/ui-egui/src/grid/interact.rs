@@ -105,7 +105,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     if primary_clicked
         && !resp.drag_started()
         && let Some(p) = pos
-        && let Some((id, act)) = crate::chartview::slicer_click(geo, sh, wb, wb.active_sheet(), p)
+        && let Some((id, act)) = crate::chartview::slicer_click(app, geo, sh, wb, wb.active_sheet(), p)
     {
         app.selected_chart = Some(id);
         match act {
@@ -1000,8 +1000,9 @@ pub(super) fn delete_selected_object(app: &mut SheetApp, sh: &Sheet) -> bool {
 }
 
 /// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's
-/// OK runs `link.open`); every other kind is refused with a message. The decision is the
-/// engine's ([`gridcraft_engine::links::classify`]), the same one `link.open` applies.
+/// OK calls `Session::open_confirmed_link`, since `link.open` refuses them for programmatic
+/// callers, #2181); every other kind is refused with a message. The decision is the engine's
+/// ([`gridcraft_engine::links::classify`]), the same one `link.open` applies.
 pub fn follow_link(app: &mut SheetApp, target: &str) {
     use gridcraft_engine::links::{LinkKind, classify};
     match classify(target) {

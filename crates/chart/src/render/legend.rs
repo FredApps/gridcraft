@@ -36,8 +36,27 @@ pub(super) fn cat_label(data: &ChartData, j: usize) -> String {
     data.categories.get(j).cloned().unwrap_or_else(|| (j + 1).to_string())
 }
 
+/// Interface strings a chart legend can need. The UI passes translated text; the default is
+/// English for callers without an interface language (PDF export, tests).
+#[derive(Clone, Copy, Debug)]
+pub struct ChartLabels<'a> {
+    /// Legend name of a Pareto chart's cumulative line.
+    pub cumulative: &'a str,
+}
+
+impl Default for ChartLabels<'_> {
+    fn default() -> Self {
+        Self { cumulative: "Cumulative %" }
+    }
+}
+
 /// Legend entries (text, colour, swatch) `render` draws for this chart; empty when hidden.
 pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swatch)> {
+    legend_entries_with(chart, data, &ChartLabels::default())
+}
+
+/// [`legend_entries`] with interface strings supplied by the UI.
+pub fn legend_entries_with(chart: &Chart, data: &ChartData, labels: &ChartLabels<'_>) -> Vec<(String, Rgba, Swatch)> {
     if chart.legend == LegendPos::None {
         return vec![];
     }
@@ -47,6 +66,10 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
             (0..n).map(|j| (cat_label(data, j), point_color(data, j), Swatch::Box)).collect()
         }
         ChartKind::Histogram | ChartKind::Funnel | ChartKind::Stock => vec![],
+        ChartKind::Pareto => match data.series.first() {
+            Some(s) => vec![(s.name.clone(), s.color, Swatch::Box), (labels.cumulative.to_string(), pareto_line_color(data), Swatch::Line)],
+            None => vec![],
+        },
         ChartKind::Waterfall => {
             if data.series.is_empty() {
                 return vec![];
@@ -78,8 +101,6 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
         }
     }
 }
-
-// ---------------------------------------------------------------- legend
 
 fn swatch_w(sw: Swatch, s: f32) -> f32 {
     if sw == Swatch::Box { s } else { s * 2.0 }
@@ -162,4 +183,9 @@ pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos
             if pos == LegendPos::Right { Bx { w: area.w - used, ..area } } else { Bx { x: area.x + used, w: area.w - used, ..area } }
         }
     }
+}
+
+/// The cumulative line's colour: the second palette colour, so it stands apart from the bars.
+pub(super) fn pareto_line_color(data: &ChartData) -> Rgba {
+    data.palette.get(1).copied().or_else(|| data.series.first().map(|_| series_color(&Theme::default(), 1))).unwrap_or(TEXT)
 }

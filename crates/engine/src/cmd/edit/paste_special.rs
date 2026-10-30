@@ -65,6 +65,9 @@ fn copy_merges(
         if let (Some(start), Some(end)) = (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset)) {
             let moved = RangeRef::new(start, end);
             let sheet = cx.sheet_mut(dest_sheet)?;
+            if sheet.tables.iter().any(|t| t.range.intersects(&moved)) {
+                continue;
+            }
             sheet.merges.retain(|existing| !existing.intersects(&moved));
             sheet.merges.push(moved);
         }
@@ -183,7 +186,12 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     moved.dynamic = f.dynamic;
                     return Some(std::sync::Arc::new(moved));
                 }
-                let moved = gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
+                let moved = if transpose {
+                    // A transposed paste turns the references instead of shifting them (#2450).
+                    gridcraft_formula::adjust::transpose_relative(e, sc, dest)
+                } else {
+                    gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64)
+                };
                 Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
             };
             if link {

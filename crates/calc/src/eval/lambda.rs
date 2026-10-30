@@ -1,6 +1,6 @@
 use super::MAX_LAMBDA_CALLS;
 use super::array::{broadcast_len, single};
-use super::{Array, CellError, Ev, Evaluator, Expr, Lambda, MAX_CELLS, Value, err};
+use super::{Array, BinOp, CellError, Ev, Evaluator, Expr, Lambda, MAX_CELLS, Value, err};
 use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
@@ -38,7 +38,10 @@ impl<'h> Evaluator<'h> {
         self.calls += 1;
         let saved = std::mem::replace(&mut self.env, l.env.clone());
         self.env.extend(bound);
-        let r = self.eval(&l.body);
+        let r = match &l.body {
+            Expr::Binary(BinOp::Add | BinOp::Sub, ..) => Ev::V(self.value_root(&l.body)),
+            _ => self.eval(&l.body),
+        };
         self.env = saved;
         self.calls -= 1;
         r
