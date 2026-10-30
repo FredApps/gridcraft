@@ -26,6 +26,8 @@ winresource = "0.1"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }
+# Cached desktop animation setting from the XDG portal, shared with the UI crate.
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Same craft-libs revision as the workspace's craft-update and craft-window (see the root
@@ -54,11 +56,6 @@ pollster = "1"
 # wgpu's DirectX 12 backend and AccessKit, at this version; this adds one small namespace to it.
 windows = { version = "0.62", default-features = false, features = ["std", "UI_ViewManagement"] }
 
-# Linux and the BSDs: the desktop's animations setting, from the XDG settings portal over D-Bus
-# (`animations/desktop.rs`). Already in the tree through AccessKit and the UI crate's desktop
-# theme, pinned to the same version so nothing is built twice.
-[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
-zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "0.21", default-features = false }
