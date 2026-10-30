@@ -670,20 +670,12 @@ impl Session {
         command_specs().iter().map(|c| c.info(self)).collect()
     }
 
-    /// Runs a command by id. Undoable commands record a history step when the workbook changed,
-    /// unless an undo group is open on the document (the group then makes the step).
-    /// Panics inside commands are caught and reported; the workbook is restored.
-    pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
-        let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
-        if let Err(why) = (spec.enabled)(self) {
-            return Err(EngineError::Disabled(id.to_string(), why));
-        }
+    fn guard_macro_command(&mut self, id: &str, query: bool) -> Result<()> {
         // A debugger whose undo group something else ended locks nothing any more (`macro.debug`
         // itself says that the run had ended).
         if id != "macro.debug" {
             macros::debug::drop_if_ended(self);
         }
-        let query = !spec.journal && !spec.undoable;
         // While a macro is being debugged its undo group is open, and its workbook is locked:
         // between steps only the debugger, queries and commands that look around run there
         // (`macros::debug::LOOKS_AROUND`). Anything else waits, undoable or not (saving, view
@@ -693,6 +685,19 @@ impl Session {
         if locked && !macros::debug::runs_while_locked(id, query) {
             return Err(EngineError::Disabled(id.to_string(), macros::debug::BUSY.into()));
         }
+        Ok(())
+    }
+
+    /// Runs a command by id. Undoable commands record a history step when the workbook changed,
+    /// unless an undo group is open on the document (the group then makes the step).
+    /// Panics inside commands are caught and reported; the workbook is restored.
+    pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
+        let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        if let Err(why) = (spec.enabled)(self) {
+            return Err(EngineError::Disabled(id.to_string(), why));
+        }
+        let query = !spec.journal && !spec.undoable;
+        self.guard_macro_command(id, query)?;
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         // A dry run inside this command that a panic cuts short leaves journaling paused and its
         // touch log open; the panic branch puts both back.

@@ -538,18 +538,7 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
                 } else {
                     [RangeRef::new(r.start, CellRef::new(r.end.row, r.start.col)), RangeRef::new(CellRef::new(r.start.row, r.end.col), r.end)]
                 };
-                let mut cells: Vec<CellRef> = Vec::new();
-                if let Some(sh) = cx.wb.sheet(sheet) {
-                    cells.extend(sh.cells.iter_range(*r).map(|(c, _)| c));
-                    if cols {
-                        let width = u64::from(r.end.col - r.start.col) + 1;
-                        let styled: Vec<u32> = sh.rows.iter().filter(|(_, i)| i.style.is_some()).map(|(row, _)| *row).collect();
-                        if (styled.len() as u64).saturating_mul(width) > 2_000_000 {
-                            return Err(bad("home.borders", "selection too large"));
-                        }
-                        cells.extend(styled.iter().flat_map(|row| (r.start.col..=r.end.col).map(|col| CellRef::new(*row, col))));
-                    }
-                }
+                let mut cells = border_line_cells(cx.wb.sheet(sheet), *r, cols)?;
                 cells.extend(ends.iter().flat_map(|e| e.iter()));
                 cells.sort_unstable();
                 cells.dedup();
@@ -650,6 +639,23 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
         }
         Ok(Json::Null)
     })
+}
+
+/// Existing cells and styled-row intersections affected by whole-line borders.
+fn border_line_cells(sh: Option<&gridcraft_model::Sheet>, r: RangeRef, cols: bool) -> Result<Vec<CellRef>> {
+    let mut cells = Vec::new();
+    if let Some(sh) = sh {
+        cells.extend(sh.cells.iter_range(r).map(|(c, _)| c));
+        if cols {
+            let width = u64::from(r.end.col - r.start.col) + 1;
+            let styled: Vec<u32> = sh.rows.iter().filter(|(_, i)| i.style.is_some()).map(|(row, _)| *row).collect();
+            if (styled.len() as u64).saturating_mul(width) > 2_000_000 {
+                return Err(bad("home.borders", "selection too large"));
+            }
+            cells.extend(styled.iter().flat_map(|row| (r.start.col..=r.end.col).map(|col| CellRef::new(*row, col))));
+        }
+    }
+    Ok(cells)
 }
 
 fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {

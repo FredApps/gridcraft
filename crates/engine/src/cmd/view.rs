@@ -527,6 +527,7 @@ fn theme(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gridcraft_core::CellRef;
 
     #[test]
     fn zoom_100_resets_the_active_sheet_zoom() {
