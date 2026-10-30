@@ -1,13 +1,13 @@
-use std::collections::HashMap;
-use super::lines::decimate;
-use super::legend::pareto_line_color;
-use super::{MAX_LINE_PTS, fixed_scale};
 use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
+use super::legend::pareto_line_color;
 use super::legend::{cat_label, point_color};
+use super::lines::decimate;
 use super::{
     AXIS, Chart, ChartData, Ctx, DOWN, Fmt, GRID, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_MARKERS, Prim, QuartileMethod, STOCK, SeriesData,
     TAU, TEXT, UP, VAlign, WHITE, clean, nice_scale,
 };
+use super::{MAX_LINE_PTS, fixed_scale};
+use std::collections::HashMap;
 
 /// Histogram bins for `vals`: right-inclusive labels and counts, as Excel's histogram and the
 /// numeric-only form of a Pareto chart use.

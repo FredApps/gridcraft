@@ -330,8 +330,6 @@ mod fit_tests {
         assert!(aggregation_too_large(usize::MAX, usize::MAX));
     }
 
-
-
     #[test]
     fn column_budget_counts_value_fields_and_grand_total() {
         assert!(!data_cols_exceed_sheet(64, true, 128));

@@ -1,5 +1,5 @@
 use super::show::{ok_cancel, take_first_focus};
-use super::{Dialog, Json, SheetApp, vec2, json};
+use super::{Dialog, Json, SheetApp, json, vec2};
 
 pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     use crate::function_library::{self as lib, ALL, MOST_RECENTLY_USED};

@@ -5659,7 +5659,6 @@ fn tables_never_hold_merged_cells() {
     assert!(sh.merges.iter().all(|m| sh.tables.iter().all(|t| !t.range.intersects(m))));
 }
 
-
 /// Normal, Page Layout and Page Break Preview are not undo steps (as in Excel), so undoing or
 /// redoing an edit keeps each sheet in the view it is in now, instead of putting back the view
 /// of the snapshot it swaps in. Found through the command-sequence fuzz (seed 177).

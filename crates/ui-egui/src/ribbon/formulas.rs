@@ -1,9 +1,9 @@
 use super::controls::{act, anchor_keytip, control_keytip, invoke, keytip, menu_items, popup_command, sep};
+use super::{Icon, SheetApp, Ui, big_button, big_split_button, json, keytip_table, small_button, small_split_button};
 use crate::function_library;
 use crate::icons::FnGlyph;
 use crate::theme::{Cat, Tokens};
 use crate::widgets::small_button_accent;
-use super::{Icon, SheetApp, Ui, big_button, big_split_button, json, keytip_table, small_button, small_split_button};
 
 /// How many cells Formulas › Error Checking › Circular References lists.
 const CIRCULAR_MENU_LIMIT: usize = 100;

@@ -413,7 +413,6 @@ fn a_first_row_like_a_sep_line_survives_a_save() {
     assert_eq!(write_csv(&plain, b',', |c| plain.value(c).as_text().unwrap_or("").to_string()).unwrap(), b"separator\r\n");
 }
 
-
 #[test]
 fn a_field_over_32767_characters_is_cut() {
     let src = format!("{},{},'{}", "x".repeat(40_000), "y".repeat(32_768), "z".repeat(40_000));

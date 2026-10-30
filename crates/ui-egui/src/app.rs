@@ -1,4 +1,3 @@
-use crate::motion;
 #[cfg(test)]
 use super::clock::monotonic_ms;
 use super::clock::now_ms;
@@ -11,6 +10,7 @@ use super::{
     clamp_interface_scale, clean_error, control, desktop_theme, dialogs, editor, floating_pictures, formula_bar, formula_locale, grid, i18n, json,
     keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
 };
+use crate::motion;
 
 mod clipboard;
 mod commands;
@@ -41,13 +41,11 @@ impl SheetApp {
         self.system_animations = self.services.animations_enabled.as_ref().and_then(|ask| ask());
     }
 
-
     pub(crate) fn flush_viewport_commands(&mut self, ctx: &egui::Context) {
         for command in self.viewport_commands.drain(..) {
             ctx.send_viewport_cmd(command);
         }
     }
-
 
     /// Constructs a `SheetApp` with default UI, grid, printing, control and screenshot state and the caller's session and services.
     pub fn new(session: Session, services: Services) -> SheetApp {
