@@ -162,15 +162,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
             "sheetViews" => read_views(e, &mut sheet),
             "sheetFormatPr" => read_sheet_format(e, &mut sheet),
             "cols" => read_cols(cx, e, &mut sheet, &mut column_assignments_left)?,
-            "mergeCells" => {
-                for m in e.kids("mergeCell") {
-                    if let Some(r) = m.attr("ref").and_then(RangeRef::parse)
-                        && !r.is_single()
-                    {
-                        sheet.merges.push(r);
-                    }
-                }
-            }
+            "mergeCells" => read_merges(e, &mut sheet),
             "conditionalFormatting" => read_cf(cx, e, &mut sheet),
             "dataValidations" => {
                 for v in e.kids("dataValidation") {
@@ -297,6 +289,17 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
         }
     }
     Ok(sheet)
+}
+
+/// Keep non-single-cell merge ranges in their stored order.
+fn read_merges(e: &El, sheet: &mut Sheet) {
+    for m in e.kids("mergeCell") {
+        if let Some(r) = m.attr("ref").and_then(RangeRef::parse)
+            && !r.is_single()
+        {
+            sheet.merges.push(r);
+        }
+    }
 }
 
 /// A protection password hash: the iterated attributes (`algorithmName`, `hashValue`,

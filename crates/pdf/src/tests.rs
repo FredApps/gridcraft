@@ -347,7 +347,7 @@ fn latin_extended_letters_use_the_latin_font() {
         format!("/F1 10 Tf\n(t) Tj\n{ext} 10 Tf\n<D1> Tj\n/F1 10 Tf\n(r) Tj\n{ext} 10 Tf\n<F1> Tj\n/F1 10 Tf\n( ) Tj\n{ext} 10 Tf\n<D0F0> Tj\n");
     assert!(c.contains(&expected), "ő/ű not set through the Latin resource: {c}");
     let pdf = doc.finish();
-    check_xref(&pdf);
+    check_xref(&pdf).unwrap();
     assert!(find(&pdf, CID_BASE_FONT.as_bytes()).is_none(), "CJK font used for Latin letters");
     for name in ["/ohungarumlaut", "/uhungarumlaut", "/Ohungarumlaut", "/Uhungarumlaut"] {
         assert!(find(&pdf, name.as_bytes()).is_some(), "missing glyph name {name}");
@@ -371,7 +371,7 @@ fn latin_extended_letters_use_each_faces_own_resource() {
         let c = page_content(&doc).to_string();
         assert!(c.contains(&format!("/F{ext} 10 Tf\n<D1> Tj\n")), "{name}: {c}");
         let pdf = doc.finish();
-        check_xref(&pdf);
+        check_xref(&pdf).unwrap();
         let dict = format!("/BaseFont /{name} /Encoding << /Type /Encoding /Differences [128 /Amacron");
         assert!(find(&pdf, dict.as_bytes()).is_some(), "{name}: no Latin Extended-A encoding");
         assert!(find(&pdf, format!("/F{ext} ").as_bytes()).is_some(), "{name}: resource missing");
