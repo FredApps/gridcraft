@@ -859,7 +859,19 @@ fn pivot_slicer_keeps_every_connected_pivot_table() {
     for name in ["Sales by Region", "Units by Region", "Trend", "PivotTable3"] {
         let pa = a.pivots.iter().find(|p| p.name == name).unwrap();
         let pb = b.pivots.iter().find(|p| p.name == name).unwrap();
-        assert_eq!((&pa.rows, &pa.columns, &pa.filters), (&pb.rows, &pb.columns, &pb.filters), "{name}");
+        assert_eq!((&pa.rows, &pa.columns), (&pb.rows, &pb.columns), "{name}");
+        // Selected items are membership, not display order. The writer emits them in
+        // the field's manual item order, which is checked independently above.
+        let filters = |p: &PivotTable| {
+            let mut filters = p.filters.clone();
+            for filter in &mut filters {
+                if let Some(selected) = &mut filter.selected {
+                    selected.sort();
+                }
+            }
+            filters
+        };
+        assert_eq!(filters(pa), filters(pb), "{name}");
     }
 }
 
