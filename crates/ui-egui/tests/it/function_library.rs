@@ -136,6 +136,10 @@ fn autosum_runs_sum_and_its_arrow_opens_the_shared_menu() {
     }
     h.run_steps(2);
     click(&mut h, "AutoSum");
+    assert_eq!(editor_text(&h).as_deref(), Some("=SUM(A1:A3)"));
+    assert_eq!(input(&h, "A4"), "", "menu-style AutoSum proposes the range before entering it");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
     assert_eq!(input(&h, "A4"), "=SUM(A1:A3)");
     h.state_mut().session.execute("selection.set", json!({"cell": "B4"})).unwrap();
     click(&mut h, "AutoSum options");
@@ -143,6 +147,10 @@ fn autosum_runs_sum_and_its_arrow_opens_the_shared_menu() {
         h.get_by_label(item);
     }
     click(&mut h, "Count Numbers");
+    assert_eq!(editor_text(&h).as_deref(), Some("=COUNT(B1:B3)"));
+    assert_eq!(input(&h, "B4"), "");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
     assert_eq!(input(&h, "B4"), "=COUNT(B1:B3)");
     click(&mut h, "AutoSum options");
     click(&mut h, "More Functions…");
