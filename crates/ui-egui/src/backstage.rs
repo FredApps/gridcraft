@@ -129,6 +129,8 @@ impl PrintScope {
     }
 }
 
+type PrintPreviewKey = (u64, u64, PrintScope, String, bool);
+
 /// The open Backstage view.
 #[derive(Clone, Debug)]
 pub struct Backstage {
@@ -142,7 +144,7 @@ pub struct Backstage {
     /// Print: the previewed page (0-based).
     preview_page: usize,
     /// Print: the preview for (document, revision, scope, the selection when it is the scope, fit to page).
-    preview: Option<((u64, u64, PrintScope, String, bool), Json)>,
+    preview: Option<(PrintPreviewKey, Json)>,
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
