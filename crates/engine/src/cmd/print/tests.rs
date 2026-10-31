@@ -565,3 +565,44 @@ fn rotated_wrapped_text_prints_rotated() {
     assert_eq!(up + down, blocks.len(), "a header line printed flat: {blocks:?}");
     assert!((1..=3).contains(&up) && (1..=3).contains(&down), "up {up}, down {down}: {blocks:?}");
 }
+
+fn preview_ranges(s: &mut Session, p: Json) -> Vec<String> {
+    let r = s.execute("file.printPreview", p).unwrap();
+    r["pageList"].as_array().unwrap().iter().map(|pg| pg["range"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn a_range_prints_instead_of_the_print_area_and_each_area_gets_its_own_pages() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "H20", "input": "y"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"printArea": "F10:H20"})).unwrap();
+    assert_eq!(preview_ranges(&mut s, json!({})), ["F10:H20"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2"})), ["A1:B2"]);
+    // Several areas, like a multi-area selection: one run of pages each, in the order given.
+    assert_eq!(preview_ranges(&mut s, json!({"range": "D4:E5,A1:B2"})), ["D4:E5", "A1:B2"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "Sheet1!A1:B2, D4:E5"})), ["A1:B2", "D4:E5"]);
+    let (_, pages) = pdf_of(&mut s, json!({"range": "A1:B2,D4:E5"}));
+    assert_eq!(pages, 2);
+    for bad in ["A1:B2,", "A1:B2,nope", ","] {
+        assert!(s.execute("file.printPreview", json!({"range": bad})).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_sheet_qualifier_on_a_later_area_does_not_swallow_the_earlier_ones() {
+    let mut s = s();
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "Sheet1!A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+    // A comma inside a quoted sheet name is not an area separator.
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,'a,b'!D4:E5"})), ["A1:B2", "D4:E5"]);
+}
+
+#[test]
+fn print_selection_rejects_oversized_area_lists() {
+    let mut s = s();
+    let many = vec!["A1"; MAX_PAGES + 1].join(",");
+    assert!(s.execute("file.printPreview", json!({"range": many})).is_err());
+    let long = "A".repeat(65_537);
+    assert!(s.execute("file.printPreview", json!({"range": long})).is_err());
+}

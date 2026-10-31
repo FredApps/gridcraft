@@ -108,20 +108,41 @@ const PROPERTIES: [(&str, &str); 6] = [
     ("description", "Description"),
 ];
 
+/// What File › Print › Settings prints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrintScope {
+    ActiveSheets,
+    EntireWorkbook,
+    /// The selected cells of the active sheet.
+    Selection,
+}
+
+impl PrintScope {
+    const ALL: [PrintScope; 3] = [PrintScope::ActiveSheets, PrintScope::EntireWorkbook, PrintScope::Selection];
+
+    fn label(self) -> &'static str {
+        match self {
+            PrintScope::ActiveSheets => "Print Active Sheets",
+            PrintScope::EntireWorkbook => "Print Entire Workbook",
+            PrintScope::Selection => "Print Selection",
+        }
+    }
+}
+
 /// The open Backstage view.
 #[derive(Clone, Debug)]
 pub struct Backstage {
     pub page: Page,
     /// Info: property drafts while a field is being edited (committed when it loses focus).
     props: [String; 6],
-    /// Print: the whole workbook rather than the active sheet.
-    pub print_all: bool,
+    /// Print: what to print (the Settings menu's first choice).
+    pub print_scope: PrintScope,
     /// Print: fit each sheet on one page.
     pub fit_to_page: bool,
     /// Print: the previewed page (0-based).
     preview_page: usize,
-    /// Print: the preview for (document, revision, whole workbook, fit to page).
-    preview: Option<((u64, u64, bool, bool), Json)>,
+    /// Print: the preview for (document, revision, scope, the selection when it is the scope, fit to page).
+    preview: Option<((u64, u64, PrintScope, String, bool), Json)>,
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
@@ -138,7 +159,7 @@ impl Backstage {
         Backstage {
             page,
             props: Default::default(),
-            print_all: false,
+            print_scope: PrintScope::ActiveSheets,
             fit_to_page: false,
             preview_page: 0,
             preview: None,
