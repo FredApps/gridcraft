@@ -1899,10 +1899,10 @@ fn a_sheet_scoped_name_snaps_on_its_own_sheet() {
 #[test]
 fn recursive_names_stay_bounded_and_cost_the_same_depth_as_before_the_snap() {
     let mut t = T::new();
-    // A name that refers to itself ends in #CALC!, not a stack overflow.
+    // A name that refers to itself ends in #NUM! under the current evaluator budget, not a stack overflow.
     t.name("Rec", "Rec-1");
     t.set("A1", "=Rec");
-    assert_eq!(t.get("A1"), Value::Error(CellError::Calc));
+    assert_eq!(t.get("A1"), Value::Error(CellError::Num));
     // A long chain of names, each one `-0` over the last, runs out of depth at the same place as it did
     // before names were snapped (value_root must charge its own level, or each link would be cheaper
     // and a chain through cells could overflow the stack).
@@ -1911,7 +1911,7 @@ fn recursive_names_stay_bounded_and_cost_the_same_depth_as_before_the_snap() {
         t.name(&format!("Nm_{i}"), &format!("Nm_{}-0", i - 1));
     }
     t.set("A2", "=Nm_250");
-    assert_eq!(t.get("A2"), Value::Error(CellError::Calc));
+    assert_eq!(t.get("A2"), Value::Error(CellError::Num));
     t.set("A3", "=Nm_20");
     assert_eq!(t.get("A3"), Value::Number(1.0));
 }
