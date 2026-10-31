@@ -418,10 +418,9 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 f.subtotal = (own != table_subtotals).then_some(own);
                 f.repeat_labels = x14_ext(e, EXT_X14_FIELD).is_some_and(|x| x.flag("fillDownLabels", false));
                 if group == PivotDateGroup::None {
-                    f.number_format = e
-                        .attr_u32("numFmtId")
-                        .filter(|id| *id != 0)
-                        .and_then(|id| crate::tables::builtin_format(id).map(str::to_string).or_else(|| cx.num_fmts.get(&id).map(|f| f.as_str().to_string())));
+                    f.number_format = e.attr_u32("numFmtId").filter(|id| *id != 0).and_then(|id| {
+                        crate::tables::builtin_format(id).map(str::to_string).or_else(|| cx.num_fmts.get(&id).map(|f| f.as_str().to_string()))
+                    });
                 }
                 let items = items_of(e);
                 let lab = |it: &El| it.attr_u32("x").and_then(|k| labels.get(k as usize)).cloned();
@@ -544,10 +543,9 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                     PivotShowAs::Normal
                 }
             };
-            let number_format = d
-                .attr_u32("numFmtId")
-                .filter(|id| *id != 0)
-                .and_then(|id| crate::tables::builtin_format(id).map(str::to_string).or_else(|| cx.num_fmts.get(&id).map(|f| f.as_str().to_string())));
+            let number_format = d.attr_u32("numFmtId").filter(|id| *id != 0).and_then(|id| {
+                crate::tables::builtin_format(id).map(str::to_string).or_else(|| cx.num_fmts.get(&id).map(|f| f.as_str().to_string()))
+            });
             let name = d.attr("name").map(str::to_string).unwrap_or_else(|| format!("{} of {}", func_caption(func), f.name));
             if let Some(last) = data_value.last_mut() {
                 *last = Some(pt.values.len());
