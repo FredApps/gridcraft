@@ -122,7 +122,7 @@ fn scale_preview(ui: &mut egui::Ui, stops: &[Json]) {
 
 fn stop_combo(ui: &mut egui::Ui, id: (&'static str, usize), current: &mut String, options: &[(&str, &str)], lang: crate::i18n::Language) {
     let shown = options.iter().find(|(v, _)| *v == current).map(|(_, l)| lang.tr(l)).unwrap_or(current.as_str());
-    egui::ComboBox::from_id_salt(id).selected_text(shown).width(120.0).show_ui(ui, |ui| {
+    craft_ui::ComboBox::from_id_salt(id).selected_text(shown).width(120.0).show_ui(ui, |ui| {
         for (v, l) in options {
             if ui.selectable_label(current == v, lang.tr(l)).clicked() {
                 *current = (*v).to_string();
@@ -136,7 +136,7 @@ fn colour_scale_editor(ui: &mut egui::Ui, d: &mut Dialog, lang: crate::i18n::Lan
     ui.horizontal(|ui| {
         ui.label(lang.tr("Format Style:"));
         let mut style = d.values.get("style").and_then(Json::as_str).unwrap_or("3color").to_string();
-        egui::ComboBox::from_id_salt("newFormattingRule.style")
+        craft_ui::ComboBox::from_id_salt("newFormattingRule.style")
             .selected_text(lang.tr(if style == "2color" { "2-Color Scale" } else { "3-Color Scale" }))
             .width(150.0)
             .show_ui(ui, |ui| {
@@ -225,7 +225,7 @@ fn preset_combo(ui: &mut egui::Ui, d: &mut Dialog, lang: crate::i18n::Language) 
     ];
     let mut preset = d.values.get("preset").and_then(Json::as_str).unwrap_or("lightRedFillDarkRedText").to_string();
     let shown = PRESETS.iter().find(|(v, _)| *v == preset).map(|(_, l)| lang.tr(l)).unwrap_or(preset.as_str());
-    egui::ComboBox::from_id_salt("newFormattingRule.preset").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+    craft_ui::ComboBox::from_id_salt("newFormattingRule.preset").selected_text(shown).width(260.0).show_ui(ui, |ui| {
         for (v, l) in PRESETS {
             if ui.selectable_label(preset == *v, lang.tr(l)).clicked() {
                 preset = (*v).to_string();
