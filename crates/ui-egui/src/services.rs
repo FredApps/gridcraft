@@ -15,6 +15,8 @@ pub struct Services {
     pub print_native: Option<printing::Submit>,
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<PickSave>,
+    /// Starts a nonblocking native path picker.
+    pub pick_async: Option<PickAsync>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
     /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
@@ -67,3 +69,6 @@ impl Default for Chrome {
         Chrome { title_bar: true, file_tab: true }
     }
 }
+
+/// A nonblocking native picker and its completion channel.
+pub type PickAsync = Box<dyn Fn(crate::PathPick, std::sync::mpsc::Sender<Option<String>>)>;

@@ -19,6 +19,7 @@ mod files;
 mod fonts;
 mod input;
 mod keys;
+mod pickers;
 mod prefs;
 mod print;
 mod quit;
@@ -100,6 +101,7 @@ impl SheetApp {
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),
             allow_close: false,
+            pending_pick: None,
             window_controls: false,
             viewport_commands: Vec::new(),
             open_switch_windows: false,
@@ -156,6 +158,7 @@ impl SheetApp {
         self.read_system_animations();
         motion::apply(ctx, self.animations_on(), &mut self.egui_motion);
         control::poll(self, ctx);
+        self.poll_pick(ctx);
         // Printing feedback is polled once per frame, here, so hidden windows and logic-only
         // frames still see worker completion. `ui` and the desktop app no longer poll it.
         self.poll_printing(ctx);

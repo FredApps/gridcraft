@@ -224,6 +224,27 @@ pub struct Notice {
     pub action: Option<(String, String)>,
 }
 
+/// A path asked of the host's asynchronous picker ([`Services::pick_async`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum PathPick {
+    /// A workbook to open.
+    Open,
+    /// Where to save; the suggested file name's extension is the file type asked for.
+    Save(String),
+}
+
+/// What a picked path is for, run once the picker answers ([`SheetApp::pick_path`]).
+pub(crate) enum AfterPick {
+    Open,
+    SaveAs,
+    /// `file.exportPdf` with the caller's other params (range, sheets, fitToPage).
+    ExportPdf(Json),
+    /// A Backstage export: the command and the extension it writes.
+    Export(&'static str, String),
+    /// Save a Copy, in this format.
+    SaveCopy(String),
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Perf {
     pub frame_ms: f64,
@@ -321,6 +342,7 @@ pub struct SheetApp {
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
+    pending_pick: Option<PendingPick>,
     /// Linux/BSD frameless windows draw their own caption and resize controls.
     pub window_controls: bool,
     viewport_commands: Vec<egui::ViewportCommand>,
@@ -357,3 +379,5 @@ pub fn clean_error(e: &str) -> String {
 pub fn cell(r: u32, c: u32) -> CellRef {
     CellRef::new(r, c)
 }
+
+type PendingPick = (AfterPick, Option<u64>, std::sync::mpsc::Receiver<Option<String>>);
