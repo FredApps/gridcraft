@@ -1035,8 +1035,8 @@ mod sizes;
 
 use cell_styles::cell_style;
 pub use cell_styles::{CELL_STYLE_NAMES, builtin_cell_style};
-pub use sizes::{approx_text_width, chars_to_points};
 use sizes::{EXACT_TEXT_WIDTHS, autofit_cols, autofit_rows, col_width, default_width, hide, row_height};
+pub use sizes::{approx_text_width, chars_to_points};
 
 #[cfg(test)]
 mod tests {
