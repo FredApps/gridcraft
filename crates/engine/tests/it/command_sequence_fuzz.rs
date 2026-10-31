@@ -42,6 +42,9 @@ const SAMPLES: [&str; 3] = ["sales", "budget", "grades"];
 /// Episodes end (undo/redo checks, then a fresh history) before the engine's 100-step undo limit
 /// starts dropping the oldest entries.
 const EPISODE_UNDO_DEPTH: usize = 90;
+/// Leave headroom below the engine's 128 MiB retained-history budget as well as its entry cap.
+/// Otherwise a valid eviction makes the fuzzer demand undo steps the product no longer retains.
+const EPISODE_UNDO_BYTES: usize = 64 * 1024 * 1024;
 /// Save and reload every this many steps (and at the end of every episode).
 const ROUNDTRIP_EVERY: usize = 10;
 /// The hidden defined name `formulas.watchWindow` keeps its list in.
@@ -282,7 +285,9 @@ impl Harness {
         if (i + 1).is_multiple_of(ROUNDTRIP_EVERY) {
             guarded(i, "xlsx roundtrip", || roundtrip_diff(&after))?;
         }
-        if self.s.doc().expect("document").undo.len() >= EPISODE_UNDO_DEPTH {
+        let history = &self.s.doc().expect("document").undo;
+        let retained = history.iter().fold(0usize, |total, entry| total.saturating_add(entry.retained_bytes));
+        if history.len() >= EPISODE_UNDO_DEPTH || retained >= EPISODE_UNDO_BYTES {
             self.end_episode(i)?;
         }
         Ok(())
