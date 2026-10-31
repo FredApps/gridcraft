@@ -31,6 +31,16 @@ struct Shared {
     anchor: CellRef,
     expr: Option<Expr>,
     text: String,
+    /// Approximate bytes one dependent cell costs (its printed text plus its expression tree),
+    /// charged against [`MAX_SHARED_FORMULA_BYTES`].
+    cost: u64,
+}
+
+/// What one sheet's hyperlinks have copied so far, across all its `<hyperlinks>` blocks.
+#[derive(Default)]
+struct LinkBudget {
+    cells: u64,
+    bytes: u64,
 }
 
 #[derive(Default)]
@@ -83,10 +93,20 @@ fn push_dynamic(st: &mut RowState, range: RangeRef) {
     st.dynamic.push(range);
 }
 
-const MAX_HYPERLINK_CELLS: u64 = 10_000;
+/// The most cell elements read from one workbook, across its sheets (the calc engine's limit).
+pub(crate) const MAX_CELLS: u64 = 16_000_000;
 /// Target and tooltip bytes kept for hyperlinks of one sheet, over all cells: the same URL is
 /// copied for every cell of its range, so length × cells must stay bounded whatever the file.
 const MAX_HYPERLINK_BYTES: u64 = 8 * 1024 * 1024;
+/// Most cells one sheet's hyperlinks may cover (each cell gets its own copy of the link).
+const MAX_HYPERLINK_CELLS: u64 = 10_000;
+/// Longest hyperlink target kept, in bytes (Excel's own limit is about 2,079 characters).
+const MAX_HYPERLINK_TARGET: usize = 8_192;
+/// Longest hyperlink ScreenTip kept, in characters (Excel's limit).
+const MAX_TOOLTIP_CHARS: usize = 255;
+/// Budget, per workbook, for shared formulas expanded into their dependent cells: each dependent
+/// costs a copy of the master's text and expression tree.
+pub const MAX_SHARED_FORMULA_BYTES: u64 = 2 << 30;
 const MAX_COLUMN_ASSIGNMENTS: u64 = 1_000_000;
 /// Most dynamic-array and legacy-array ranges of one sheet.
 const MAX_DYNAMIC_RANGES: usize = 65_536;
@@ -125,12 +145,10 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
     let mut st = RowState::default();
-    let res = xml::parse_streaming(&bytes, &["row"], &mut |row| {
-        read_row(cx, &mut sheet, &mut st, &row);
-        Ok(())
-    });
+    let res = xml::parse_streaming(&bytes, &["row"], &mut |row| read_row(cx, &mut sheet, &mut st, &row));
     let root = match res {
         Ok(r) => r,
+        Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
         Err(e) => {
             cx.warn(format!("sheet \"{name}\" is damaged ({e}); kept {} rows", st.rows));
             El::default()
@@ -144,7 +162,14 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     }
     drop(bytes);
 
+    // Relationships by id: hyperlinks, drawings and tables each look one up.
+    let mut rel_by_id: HashMap<&str, &Rel> = HashMap::with_capacity(rels.len());
+    for r in &rels {
+        // The first of duplicate ids wins, as a linear search would find it.
+        rel_by_id.entry(r.id.as_str()).or_insert(r);
+    }
     let mut fit_to_page = false;
+    let mut link_budget = LinkBudget::default();
     let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
     cx.cf_ext_ids.clear();
     for e in &root.children {
@@ -171,7 +196,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     }
                 }
             }
-            "hyperlinks" => read_hyperlinks(cx, name, e, &rels, &mut sheet),
+            "hyperlinks" => read_hyperlinks(cx, name, e, &rel_by_id, &mut sheet, &mut link_budget),
             "autoFilter" => sheet.autofilter = read_autofilter(cx, e),
             "printOptions" => {
                 sheet.print.gridlines = e.flag("gridLines", false);
@@ -241,14 +266,14 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 });
             }
             "drawing" => {
-                if let Some(rel) = e.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)) {
+                if let Some(rel) = e.attr("id").and_then(|id| rel_by_id.get(id).copied()) {
                     let target = rel.target.clone();
                     crate::drawing::read_drawing(cx, &target, &mut sheet)?;
                 }
             }
             "tableParts" => {
                 for tp in e.kids("tablePart") {
-                    if let Some(rel) = tp.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)) {
+                    if let Some(rel) = tp.attr("id").and_then(|id| rel_by_id.get(id).copied()) {
                         let target = rel.target.clone();
                         if let Some(x) = cx.optional_xml(&target)?
                             && let Some(mut t) = read_table(cx, &x)
@@ -424,19 +449,19 @@ fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Re
     Ok(())
 }
 
-fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
+fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) -> Result<(), IoError> {
     st.rows += 1;
     let r = match row.attr_u32("r") {
         Some(r) if r >= 1 => r - 1,
         Some(_) => {
             st.dropped += 1;
-            return;
+            return Ok(());
         }
         None => st.next_row,
     };
     if r >= MAX_ROWS {
         st.dropped += 1;
-        return;
+        return Ok(());
     }
     // Excel writes each row once, in ascending order, and repairs a file that does not — but an
     // element repeating the row it just wrote is not repaired, it is merged: the later value
@@ -472,6 +497,10 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
     }
     let mut next_col = 0u32;
     for c in row.kids("c") {
+        cx.cells += 1;
+        if cx.cells > MAX_CELLS {
+            return Err(IoError::TooLarge(format!("the workbook has more than {MAX_CELLS} cells")));
+        }
         let pos = match c.attr("r") {
             Some(a) => match CellRef::parse(a.trim()) {
                 Some(p) => p,
@@ -505,6 +534,7 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
         next_col = pos.col + 1;
         read_cell(cx, sheet, st, c, pos);
     }
+    Ok(())
 }
 
 fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) {
@@ -595,13 +625,25 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             let si = f.attr_u32("si")?;
             if !text.is_empty() {
                 let expr = gridcraft_formula::parse(text).ok();
-                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string() });
+                let cost = shared_cost(text, expr.as_ref());
+                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string(), cost });
                 Some(Formula::new(text))
             } else {
                 let Some(sh) = st.shared.get(&si) else {
                     cx.warn("a shared formula refers to a missing master cell; kept the cached value");
                     return None;
                 };
+                if sh.expr.is_none() && sh.text.len() > gridcraft_formula::MAX_FORMULA_LEN {
+                    cx.warn(format!(
+                        "a shared formula is longer than {} characters; kept the cached values of the cells that share it",
+                        gridcraft_formula::MAX_FORMULA_LEN
+                    ));
+                    return None;
+                }
+                if !charge(&mut cx.shared_formula_bytes, sh.cost, MAX_SHARED_FORMULA_BYTES) {
+                    cx.warn("shared formulas expand to too much data; kept the cached values of the remaining cells that share them");
+                    return None;
+                }
                 Some(match &sh.expr {
                     Some(e) => {
                         let dr = pos.row as i64 - sh.anchor.row as i64;
@@ -679,6 +721,35 @@ pub(crate) fn parse_iso_datetime_with(s: &str, ymd: impl Fn(i64, i64, i64) -> Op
     Some(serial)
 }
 
+/// What one dependent of a shared formula costs: its printed text plus its expression tree.
+fn shared_cost(text: &str, expr: Option<&Expr>) -> u64 {
+    let mut nodes = 0u64;
+    if let Some(e) = expr {
+        e.walk(&mut |_| nodes = nodes.saturating_add(1));
+    }
+    let node = std::mem::size_of::<Expr>() as u64;
+    (text.len() as u64).saturating_mul(2).saturating_add(nodes.saturating_mul(node)).saturating_add(64)
+}
+
+/// Adds `cost` to `used` when that stays within `cap`; `false` (and `used` unchanged) otherwise.
+fn charge(used: &mut u64, cost: u64, cap: u64) -> bool {
+    match used.checked_add(cost) {
+        Some(total) if total <= cap => {
+            *used = total;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The first `max` characters of `s`.
+fn truncate_chars(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((at, _)) => s.get(..at).unwrap_or(s).to_string(),
+        None => s.to_string(),
+    }
+}
+
 pub fn parse_sqref(s: Option<&str>) -> Vec<RangeRef> {
     s.unwrap_or("").split_whitespace().filter_map(RangeRef::parse).collect()
 }
@@ -725,6 +796,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shared_formula_budget_stops_expansion() {
+        let expr = gridcraft_formula::parse("SUM(1,2,3)").ok();
+        let cost = shared_cost("SUM(1,2,3)", expr.as_ref());
+        assert!(cost > 64 + 4 * std::mem::size_of::<Expr>() as u64);
+        let cap = cost * 3;
+        let mut used = 0;
+        assert!((0..3).all(|_| charge(&mut used, cost, cap)));
+        assert!(!charge(&mut used, cost, cap));
+        assert_eq!(used, cap);
+        assert!(!charge(&mut used, u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn truncate_keeps_whole_characters() {
+        assert_eq!(truncate_chars("ab\u{e9}d", 3), "ab\u{e9}");
+        assert_eq!(truncate_chars("ab", 3), "ab");
+    }
+
+    #[test]
     fn iso_dates() {
         assert_eq!(parse_iso_datetime("1900-01-01", DateSystem::D1900), Some(1.0));
         assert_eq!(parse_iso_datetime("2024-01-01T12:00:00Z", DateSystem::D1900), Some(45292.5));
@@ -732,6 +822,43 @@ mod tests {
         assert_eq!(parse_iso_datetime("06:00:00", DateSystem::D1900), Some(0.25));
         assert_eq!(parse_iso_datetime("garbage", DateSystem::D1900), None);
         assert_eq!(parse_iso_datetime("2024-13-01", DateSystem::D1900), None);
+    }
+
+    fn ctx(pkg: crate::package::Package<'_>) -> Ctx<'_> {
+        Ctx {
+            pkg,
+            report: Default::default(),
+            sst: vec![],
+            phonetics: vec![],
+            xf_map: vec![],
+            dxfs: vec![],
+            palette: vec![],
+            date_system: DateSystem::D1900,
+            styles: Default::default(),
+            persons: Default::default(),
+            next_id: 1,
+            num_fmts: Default::default(),
+            cell_pictures: vec![],
+            cf_ext_ids: vec![],
+            cells: 0,
+            shared_formula_bytes: 0,
+            legacy_formulas: vec![],
+            slicers: Default::default(),
+            sheet_exts: vec![],
+            sheet_exts_dropped: vec![],
+        }
+    }
+
+    /// #2159: the workbook-wide cell cap refuses the open once passed, across sheets.
+    #[test]
+    fn cells_past_the_workbook_cap_are_refused() {
+        let bytes = crate::tests::minimal(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c></row></sheetData>"#, &[], "", "");
+        let pkg = crate::package::Package::open(&bytes).unwrap();
+        let mut cx = ctx(pkg);
+        cx.cells = MAX_CELLS - 2;
+        let sheet = read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data").unwrap();
+        assert_eq!(sheet.cells.len(), 2);
+        assert!(matches!(read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data"), Err(IoError::TooLarge(_))));
     }
 
     #[test]
