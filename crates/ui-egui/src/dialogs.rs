@@ -5,6 +5,7 @@
 //! `ui.dialog.set {field, value}` edits a field and `ui.dialog.confirm` presses OK.
 
 use egui::{Color32, Key, Sense, Stroke, StrokeKind, vec2};
+use gridcraft_engine::model::{CfRule, CfValueKind, Color as CellColor};
 
 use crate::icons::{self, Icon};
 use gridcraft_engine::core::{CellRef, RangeRef};
@@ -16,6 +17,7 @@ use crate::theme;
 mod about;
 mod analysis;
 mod charts;
+mod color_scale;
 mod command_search;
 mod cond_format_rules;
 mod data;
@@ -30,6 +32,7 @@ mod zoom;
 
 use analysis::toolpak_defaults;
 use charts::select_chart;
+use color_scale::{new_rule_defaults, sync_rule_pick};
 use data::{abs, data_validation_fields, remove_duplicates_range, validation_defaults};
 use find::go_to_entries;
 pub(crate) use names::insert_name;
@@ -849,6 +852,27 @@ impl Dialog {
                 d.values.insert("operator".into(), p("operator"));
                 d
             }
+            "newFormattingRule" => {
+                let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
+                let mut d = Dialog::custom("newFormattingRule", "New Formatting Rule", new_rule_defaults(&params, &theme));
+                d.command = Some(if params.get("edit").is_some() { "home.manageRules" } else { "home.conditionalFormat" });
+                // The sheet and selection the rule was opened on: Excel's "Applies to" stays put
+                // even if the selection moves or another sheet is shown before OK.
+                let (sheet, applies_to) = app
+                    .session
+                    .active()
+                    .map(|doc| {
+                        (
+                            doc.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(),
+                            doc.selection.ranges.iter().map(RangeRef::a1).collect::<Vec<_>>().join(","),
+                        )
+                    })
+                    .unwrap_or_default();
+                d.values.insert("sheet".into(), json!(sheet));
+                d.values.insert("applies_to".into(), json!(applies_to));
+                sync_rule_pick(&mut d);
+                d
+            }
             "formatCells" => {
                 let mut d = Dialog::custom("formatCells", "Format Cells", json!({}));
                 d.tab = p("tab").as_str().unwrap_or("Number").to_string();
@@ -1136,5 +1160,63 @@ mod tests {
         let d = Dialog::open(&mut app, "dataValidation", json!({})).unwrap();
         assert_eq!(d.values["type"], "list");
         assert!(d.values.get("formula1").is_none());
+    }
+
+    #[test]
+    fn formula_rule_picks_references_and_keeps_the_opening_range() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        session.execute("selection.set", json!({"range": "B2:C5"})).unwrap();
+        let mut app = SheetApp::new(session, Default::default());
+        let sheet = app.session.active().unwrap().wb.active().unwrap().name.clone();
+        let mut d = Dialog::open(&mut app, "newFormattingRule", json!({"ruleType": "formula"})).unwrap();
+        assert!(d.picks_references());
+        assert_eq!(d.pick.as_ref().unwrap().sheet, sheet);
+
+        // A grid click writes the reference into the formula box.
+        d.pick_reference(CellRef::new(0, 0), &sheet, false);
+        assert_eq!(d.values["formula"], "=$A$1");
+
+        // Moving the selection before OK must not move the rule.
+        app.session.execute("selection.set", json!({"range": "D2:E6"})).unwrap();
+        let params = build_params(&d);
+        assert_eq!(params["sheet"], sheet.as_str());
+        assert_eq!(params["range"], "B2:C5");
+    }
+
+    #[test]
+    fn a_rule_switched_to_formula_picks_on_the_opening_scope() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        session.execute("selection.set", json!({"range": "B2:C5"})).unwrap();
+        let mut app = SheetApp::new(session, Default::default());
+        let sheet = app.session.active().unwrap().wb.active().unwrap().name.clone();
+        // The dialog opens on the default (colour scale) type; choosing the formula type later
+        // turns point mode on, still on the sheet and range it opened with.
+        let mut d = Dialog::open(&mut app, "newFormattingRule", json!({})).unwrap();
+        assert!(!d.picks_references());
+        d.values.insert("ruleType".into(), json!("formula"));
+        sync_rule_pick(&mut d);
+        assert!(d.picks_references());
+
+        app.session.execute("selection.set", json!({"range": "D2:E6"})).unwrap();
+        let params = build_params(&d);
+        assert_eq!(params["sheet"], sheet.as_str());
+        assert_eq!(params["range"], "B2:C5");
+    }
+
+    #[test]
+    fn colour_scale_rule_keeps_the_opening_range_without_grid_references() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        session.execute("selection.set", json!({"range": "B2:C5"})).unwrap();
+        let mut app = SheetApp::new(session, Default::default());
+        let sheet = app.session.active().unwrap().wb.active().unwrap().name.clone();
+        let d = Dialog::open(&mut app, "newFormattingRule", json!({})).unwrap();
+        assert!(!d.picks_references());
+        // No pick box, but the rule still covers the range and sheet the dialog opened on.
+        let params = build_params(&d);
+        assert_eq!(params["sheet"], sheet.as_str());
+        assert_eq!(params["range"], "B2:C5");
     }
 }

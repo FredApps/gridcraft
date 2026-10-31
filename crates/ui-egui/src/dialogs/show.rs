@@ -1,6 +1,7 @@
 use super::about::about;
 use super::analysis::{analysis_toolpak, goal_seek, solver, solver_results};
 use super::charts::{recommended_charts, select_data};
+use super::color_scale::{cf_stop_params, new_formatting_rule};
 use super::command_search::command_search;
 use super::cond_format_rules::manage_rules;
 use super::data::{advanced_filter_form, data_validation_form, sort};
@@ -89,6 +90,33 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                 v["range"] = json!(pick.applies_to);
             }
         }
+        "newFormattingRule" => {
+            let mut out = match d.values.get("ruleType").and_then(Json::as_str).unwrap_or("allCells") {
+                "formula" => {
+                    let formula = d.values.get("formula").and_then(Json::as_str).unwrap_or("").to_string();
+                    let preset = d.values.get("preset").and_then(Json::as_str).unwrap_or("lightRedFillDarkRedText");
+                    json!({"rule": {"type": "expression", "formula": formula, "preset": preset}})
+                }
+                _ => {
+                    let stops: Vec<Json> =
+                        d.values.get("stops").and_then(Json::as_array).map(|a| a.iter().map(cf_stop_params).collect()).unwrap_or_default();
+                    json!({"rule": {"type": "colorScale", "stops": stops}})
+                }
+            };
+            // The rule covers the sheet and range the dialog opened on, not whatever the
+            // selection shows now: a formula rule's pick box holds the same opening scope, and
+            // colour scales have no pick box but need it just as much to edit in place.
+            let sheet = d.values.get("sheet").and_then(Json::as_str).unwrap_or_default();
+            let applies_to = d.values.get("applies_to").and_then(Json::as_str).unwrap_or_default();
+            if !sheet.is_empty() && !applies_to.is_empty() {
+                out["sheet"] = json!(sheet);
+                out["range"] = json!(applies_to);
+            }
+            if let Some(edit) = d.values.get("edit").and_then(Json::as_u64) {
+                out["edit"] = json!(edit);
+            }
+            v = out;
+        }
         "series" => {
             if let Some(s) = d.values.get("stop").and_then(Json::as_str).and_then(|s| s.parse::<f64>().ok()) {
                 v["stop"] = json!(s);
@@ -138,7 +166,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "newFormattingRule" | "journal" | "agents" => 520.0,
         "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
@@ -175,6 +203,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "nameManager" => name_manager(app, ui, &mut d, &mut open),
                 "pasteName" => paste_name(app, ui, &mut d, &mut confirm, &mut open),
                 "manageRules" => manage_rules(app, ui),
+                "newFormattingRule" => new_formatting_rule(ui, &mut d, &mut confirm, &mut open),
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
@@ -457,6 +486,11 @@ pub(super) fn open_confirmed_link(app: &mut SheetApp, d: &Dialog) -> Result<(), 
 }
 
 pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
+    ok_cancel_enabled(ui, confirm, open, true);
+}
+
+/// Like [`ok_cancel`], but OK (and Enter) do nothing while `enabled` is false.
+pub(super) fn ok_cancel_enabled(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool, enabled: bool) {
     ui.add_space(8.0);
     // A row as tall as the buttons: a right-to-left layout straight in the window takes all the
     // height it is offered, which stretched every form dialog to the screen's height.
@@ -464,14 +498,15 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let lang = crate::i18n::current(ui.ctx());
             let t = crate::theme::Tokens::get(ui.ctx());
-            let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
-            if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+            let ok =
+                ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
+            if enabled && (ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter))) {
                 *confirm = true;
             }
             if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {
                 *open = false;
             }
-        })
+        });
     });
 }
 
@@ -504,7 +539,7 @@ pub(super) fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
 
 /// Keeps a picking formula box's caret, and gives it the keyboard back after a grid click put a
 /// reference in it (the click took the focus), its caret after the reference.
-fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
+pub(super) fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
     if typed {
         pick.point = None;
     }
