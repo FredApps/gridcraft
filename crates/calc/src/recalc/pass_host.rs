@@ -295,9 +295,8 @@ impl PassHost<'_> {
                     k.1.col.saturating_add((a.cols as u32).saturating_sub(1)),
                 );
                 let range = RangeRef::new(k.1, end);
-                self.spill_conflict |= self.wb.sheet(k.0).is_some_and(|sheet| {
-                    sheet.spill_ranges.iter().any(|(anchor, old)| *anchor != k.1 && old.intersects(&range))
-                });
+                self.spill_conflict |=
+                    self.wb.sheet(k.0).is_some_and(|sheet| sheet.spill_ranges.iter().any(|(anchor, old)| *anchor != k.1 && old.intersects(&range)));
                 self.spills.insert(k, a.clone());
                 a.data.first().cloned().unwrap_or_default()
             }
