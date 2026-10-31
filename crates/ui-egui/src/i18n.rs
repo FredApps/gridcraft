@@ -438,6 +438,16 @@ mod tests {
     }
 
     #[test]
+    fn verification_dialog_labels_are_localized() {
+        assert_eq!(Language::Ru.tr("Or select a category:"), "Или выберите категорию:");
+        assert_eq!(Language::Ru.tr("Most Recently Used"), "Недавно использованные");
+        assert_eq!(Language::Es.tr("Paste Special"), "Pegado especial");
+        assert_eq!(Language::Es.tr("Paste Special|Add"), "Sumar");
+        assert_eq!(Language::Es.tr("Text to Columns|Comma"), "Coma");
+        assert_eq!(Language::Es.tr("Convert Text to Columns"), "Convertir texto en columnas");
+    }
+
+    #[test]
     fn translations_never_show_the_context_prefix() {
         // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its
         // value shows it on screen (File › Options read "Options|Général" in French).
