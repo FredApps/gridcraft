@@ -1289,9 +1289,9 @@ fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Follows a link: a reference selects it, an `http`/`https`/`mailto` address is handed to the
-/// host (`UiRequest::OpenUrl`); anything else is refused ([`crate::links::classify`]). Opens no
-/// dialog; the interactive click asks for confirmation first, in the UI.
+/// Follows an internal reference. External addresses require the host to opt into
+/// [`crate::links::LinkPolicy::Allow`]; the default command path refuses them. The UI opens
+/// a user-confirmed address through [`Session::open_confirmed_link`], not this command.
 fn open_link(s: &mut Session, p: &Json) -> Result<Json> {
     let target = match str_param(p, "url").or_else(|| str_param(p, "target")) {
         Some(t) => t.to_string(),
@@ -1307,6 +1307,9 @@ fn open_link(s: &mut Session, p: &Json) -> Result<Json> {
     match crate::links::classify(&target) {
         crate::links::LinkKind::Internal(r) => super::edit::go_to(s, &json!({"reference": r.trim_start_matches('#')})),
         crate::links::LinkKind::External(u) => {
+            if s.link_policy != crate::links::LinkPolicy::Allow {
+                return Err(EngineError::Other(crate::links::NEEDS_CONFIRMATION.into()));
+            }
             s.ui_requests.push(crate::UiRequest::OpenUrl(u.clone()));
             Ok(json!({"opened": u}))
         }
