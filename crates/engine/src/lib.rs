@@ -738,13 +738,12 @@ impl Session {
         });
         // The groups open on the document before the command (usually none), for the same reason.
         let groups_before: Vec<_> = match &before {
-            Some((uid, ..)) => {
-                self.groups
-                    .iter()
-                    .filter(|g| g.doc == *uid)
-                    .map(|g| (g.id, g.label.clone(), g.wb.clone(), g.selection.clone(), g.circular.clone()))
-                    .collect()
-            }
+            Some((uid, ..)) => self
+                .groups
+                .iter()
+                .filter(|g| g.doc == *uid)
+                .map(|g| (g.id, g.label.clone(), g.wb.clone(), g.selection.clone(), g.circular.clone()))
+                .collect(),
             None => Vec::new(),
         };
         // The recorder keeps top-level calls with the place they ran in.
