@@ -32,3 +32,23 @@ fn total_row_still_grows_an_ordinary_table() {
     assert!(t.totals_row);
     assert_eq!(t.range.end.row, 3);
 }
+
+#[test]
+fn total_row_cannot_overlap_a_merge_or_another_table() {
+    for merged in [true, false] {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("insert.table", json!({"range": "B2:D4", "header": true})).unwrap();
+        if merged {
+            s.execute("home.mergeCenter", json!({"range": "C5:E7"})).unwrap();
+        } else {
+            s.execute("insert.table", json!({"range": "C5:E7", "header": true})).unwrap();
+        }
+        let before = s.doc().unwrap().wb.clone();
+        let undo = s.doc().unwrap().undo.len();
+        assert!(s.execute("table.totalRow", json!({"on": true, "table": "Table1"})).is_err());
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().tables[0].range, before.active().unwrap().tables[0].range);
+        assert!(!s.doc().unwrap().wb.active().unwrap().tables[0].totals_row);
+        assert_eq!(s.doc().unwrap().undo.len(), undo);
+    }
+}

@@ -844,6 +844,23 @@ pub(crate) fn check_table_shift(sh: &Sheet, e: &Edit) -> Result<()> {
         Edit::DeleteCells { axis, range } => (axis, range, true),
         _ => return Ok(()),
     };
+    // A partial shift cannot split a merged rectangle into independently moving cells.
+    // Mapping only its corners can otherwise expand it across another merge or table.
+    for m in &sh.merges {
+        let (moves, whole) = match axis {
+            Axis::Rows => (
+                m.end.row >= r.start.row && m.start.col <= r.end.col && m.end.col >= r.start.col,
+                r.start.col <= m.start.col && r.end.col >= m.end.col,
+            ),
+            Axis::Cols => (
+                m.end.col >= r.start.col && m.start.row <= r.end.row && m.end.row >= r.start.row,
+                r.start.row <= m.start.row && r.end.row >= m.end.row,
+            ),
+        };
+        if moves && !whole {
+            return Err(EngineError::Other("This operation would shift only part of a merged cell. Unmerge it first.".into()));
+        }
+    }
     for t in &sh.tables {
         let tr = t.range;
         let ok = match axis {

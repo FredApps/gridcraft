@@ -400,6 +400,19 @@ fn table_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
     let on = bool_param(p, "on");
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
+        if which == "totals"
+            && let Some(t) = sh.tables.get(ti)
+            && !t.totals_row
+            && on.unwrap_or(true)
+        {
+            let mut grown = t.range;
+            grown.end.row = grown.end.row.saturating_add(1);
+            if sh.merges.iter().any(|m| m.intersects(&grown))
+                || sh.tables.iter().enumerate().any(|(i, other)| i != ti && other.range.intersects(&grown))
+            {
+                return Err(EngineError::Other("The total row would overlap merged cells or another table.".into()));
+            }
+        }
         let Some(t) = sh.tables.get_mut(ti) else { return Ok(Json::Null) };
         match which {
             "totals" => {

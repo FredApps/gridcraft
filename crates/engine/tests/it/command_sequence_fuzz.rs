@@ -1108,3 +1108,53 @@ fn view_mode_switch_is_not_an_undo_difference() {
         assert!(failure.is_none(), "`{id}`: {failure:?}");
     }
 }
+
+// Expanded verification cases reported on 2026-10-31. Keep their full 200-step
+// budgets in CI: the default short smoke test does not reach these failures.
+#[test]
+fn verification_seed_3_preserves_workbook_invariants() {
+    let (_, sequence, failure) = run_seed(3, 200);
+    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
+}
+
+#[test]
+fn verification_seed_6_preserves_workbook_invariants() {
+    let (_, sequence, failure) = run_seed(6, 200);
+    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
+}
+
+#[test]
+fn verification_seed_14_preserves_workbook_invariants() {
+    let (_, sequence, failure) = run_seed(14, 200);
+    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
+}
+
+#[test]
+fn verification_seed_30_preserves_workbook_invariants() {
+    let (_, sequence, failure) = run_seed(30, 200);
+    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
+}
+
+#[test]
+fn verification_seed_43_preserves_workbook_invariants() {
+    let (_, sequence, failure) = run_seed(43, 200);
+    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
+}
+
+#[test]
+fn verification_seed_45_preserves_workbook_invariants() {
+    let (_, sequence, failure) = run_seed(45, 200);
+    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
+}
+
+#[test]
+fn verification_seed_48_preserves_workbook_invariants() {
+    let (_, sequence, failure) = run_seed(48, 200);
+    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
+}
+
+#[test]
+fn verification_seed_49_preserves_workbook_invariants() {
+    let (_, sequence, failure) = run_seed(49, 200);
+    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
+}
