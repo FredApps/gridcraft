@@ -804,10 +804,22 @@ fn pivot_slicer_round_trips() {
     assert!(y.row_height.is_some_and(|h| (h - 30.0).abs() < 1.0), "{:?}", y.row_height);
     let pa = a.pivots.iter().find(|p| p.name == "Sales by Region").unwrap();
     let pb = b.pivots.iter().find(|p| p.name == "Sales by Region").unwrap();
-    assert_eq!(pa.filters, pb.filters, "the slicer's selection is the pivot's hidden items");
+    assert_eq!(filter_membership(pa), filter_membership(pb), "the slicer's selection is the pivot's hidden items");
     // A second save is stable.
     let (again, _) = read_xlsx(&write_xlsx(&back).unwrap()).unwrap();
     assert_eq!(again.sheet(1).unwrap().slicers, b.slicers);
+}
+
+// Selected items are membership, not display order. Preserve all filter metadata
+// and compare the field's manual display order separately.
+fn filter_membership(p: &PivotTable) -> Vec<PivotFilter> {
+    let mut filters = p.filters.clone();
+    for filter in &mut filters {
+        if let Some(selected) = &mut filter.selected {
+            selected.sort();
+        }
+    }
+    filters
 }
 
 /// A slicer on Product connected to "Sales by Region" and a second PivotTable on the same source
@@ -860,18 +872,7 @@ fn pivot_slicer_keeps_every_connected_pivot_table() {
         let pa = a.pivots.iter().find(|p| p.name == name).unwrap();
         let pb = b.pivots.iter().find(|p| p.name == name).unwrap();
         assert_eq!((&pa.rows, &pa.columns), (&pb.rows, &pb.columns), "{name}");
-        // Selected items are membership, not display order. The writer emits them in
-        // the field's manual item order, which is checked independently above.
-        let filters = |p: &PivotTable| {
-            let mut filters = p.filters.clone();
-            for filter in &mut filters {
-                if let Some(selected) = &mut filter.selected {
-                    selected.sort();
-                }
-            }
-            filters
-        };
-        assert_eq!(filters(pa), filters(pb), "{name}");
+        assert_eq!(filter_membership(pa), filter_membership(pb), "{name}");
     }
 }
 
