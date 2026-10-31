@@ -1,5 +1,6 @@
 use super::{
-    Align2, Backstage, Icon, Json, Outcome, PrintScope, Rect, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, dim, json, pos2, square_button, theme, vec2,
+    Align2, Backstage, Icon, Json, Outcome, PrintScope, Rect, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, dim, json, pos2, square_button, theme,
+    vec2,
 };
 
 /// Builds the print scope and fit-to-page parameters, caches `file.printPreview` per document revision/options, and draws page thumbnails with navigation plus the print settings and Print action.
