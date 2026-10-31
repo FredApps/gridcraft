@@ -1935,7 +1935,10 @@ fn a_recorded_script_run_leaves_out_the_steps_a_macro_may_not_run() {
     ]);
     s.execute("automate.newScript", json!({"name": "Mixed", "commands": steps})).unwrap();
     s.execute("macro.record", json!({"relative": false})).unwrap();
+    let journal_start = s.journal.len();
     s.execute("automate.runScript", json!({"name": "Mixed"})).unwrap();
+    let journal_ids: Vec<&str> = s.journal[journal_start..].iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(journal_ids, ["cell.set"], "the journal still holds each executed edit once, without the script wrapper");
     let r = s.execute("macro.record", json!({"stop": true, "name": "Rec"})).unwrap();
     assert_eq!(r["skipped"], json!(["app.commands", "macro.list"]));
     assert_eq!(recorded(&mut s, "Rec"), ["cell.set {\"cell\":\"B1\",\"input\":\"kept\"}"]);

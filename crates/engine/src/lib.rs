@@ -724,7 +724,7 @@ impl Session {
             None => Vec::new(),
         };
         // The recorder keeps top-level calls with the place they ran in.
-        let place = (self.journal_nesting == 0 && self.recorder.is_some()).then(|| match self.active() {
+        let place = (self.depth == 0 && self.recorder.is_some()).then(|| match self.active() {
             Some(d) => (d.uid, d.wb.active_sheet(), d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
             None => (0, 0, String::new(), Selection::default()),
         });
@@ -802,7 +802,10 @@ impl Session {
         if result.is_err() {
             self.rollback_groups_from(first_group);
         }
-        if journals && result.is_ok() {
+        // Script runs keep their nested steps in the journal, but the macro recorder needs
+        // the outer run with its captured steps to preserve origins and report refused steps.
+        let records_script = id == "automate.runScript" && place.is_some();
+        if (journals || records_script) && result.is_ok() {
             // A command that started recording is not part of the recording; one that stopped it
             // finds no recorder. A menu-style call that only opened a dialog (`file.open` with no
             // file, `home.formatCells` with no style) is not recorded either: the dialog's own
@@ -831,7 +834,7 @@ impl Session {
                     rec.attach_ran(ran);
                 }
             }
-            if self.journal_paused == 0 {
+            if journals && self.journal_paused == 0 {
                 self.push_journal(id, cmd::journal_params(&params));
             }
             recent::note(&mut self.prefs.recent_functions, id, &params);
