@@ -312,7 +312,7 @@ fn the_cap_counts_the_bytes_the_cells_hold_and_accepted_exports_keep_every_posit
 fn fields_past_the_last_column_are_not_collected() {
     let src = format!("{}last\nnext,row\n", "x,".repeat(100_000));
     let mut records = vec![];
-    crate::csv::parse_records(&src, ',', '"', |rec| {
+    crate::csv::parse_records(&src, Some(','), Some('"'), |rec| {
         records.push(rec);
         true
     });
