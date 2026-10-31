@@ -17,6 +17,9 @@ fn value(s: &Session, sheet: &str, cell: &str) -> Value {
 fn copied_sheet_keeps_spill_values_through_full_recalc() {
     let mut s = Session::new();
     run(&mut s, "file.new", json!({"sample": "grades"}));
+    // Merges are correctly refused inside tables. Keep the original whole-column merge
+    // and spill-copy scenario by converting the sample table to ordinary cells first.
+    run(&mut s, "table.convertToRange", json!({"table": "Grades"}));
     run(&mut s, "home.mergeCells", json!({"range": "F:H"}));
     run(&mut s, "cell.set", json!({"cell": "J54", "input": "=SEQUENCE(5)*C6"}));
     run(&mut s, "selection.set", json!({"range": "15:15"}));
