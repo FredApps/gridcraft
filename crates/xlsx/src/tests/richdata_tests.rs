@@ -300,3 +300,52 @@ fn a_repeated_row_element_replaces_a_picture_with_its_scalar() {
     assert_eq!(sheet.value(at("A1")), Value::Number(42.0));
     assert!(!sheet.cell_pictures.contains_key(&at("A1")));
 }
+
+#[test]
+fn modern_errors_roundtrip_with_interleaved_pictures_and_formulas() {
+    let mut wb = Workbook::new();
+    let image = Arc::new(picture(png(), "image/png", "original"));
+    let sheet = wb.sheet_mut(0).unwrap();
+    sheet.set_value(at("A1"), Value::Error(CellError::Spill));
+    sheet.set_picture(at("B1"), image.clone());
+    sheet.set_value(at("C1"), Value::Error(CellError::Calc));
+    sheet.set_picture(at("D1"), image.clone());
+    sheet.set_value(at("E1"), Value::Error(CellError::Spill));
+    sheet.cells.set(at("F1"), Cell { value: Value::Error(CellError::Spill), ..Cell::formula(Formula::new("SEQUENCE(2)")) });
+    let bytes = write_xlsx(&wb).unwrap();
+    let (loaded, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let sheet = loaded.sheet(0).unwrap();
+    for cell in ["A1", "E1", "F1"] {
+        assert_eq!(sheet.value(at(cell)), Value::Error(CellError::Spill));
+    }
+    assert_eq!(sheet.value(at("C1")), Value::Error(CellError::Calc));
+    assert!(sheet.cell(at("F1")).unwrap().formula.is_some());
+    for cell in ["B1", "D1"] {
+        assert_eq!(sheet.cell_pictures.get(&at(cell)), Some(&image));
+    }
+    let mut package = Package::open(&bytes).unwrap();
+    let xml = package.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    for cell in xml.child("sheetData").unwrap().kids("row").flat_map(|r| r.kids("c")) {
+        assert_eq!(cell.child("v").unwrap().text, "#VALUE!");
+        assert!(cell.attr_u32("vm").is_some_and(|i| i > 0));
+    }
+}
+
+#[test]
+fn reads_modern_error_metadata_with_independent_indices() {
+    for (code, expected) in [(8, CellError::Spill), (13, CellError::Calc)] {
+        let mut parts = independent_parts(false);
+        for (path, bytes) in &mut parts {
+            if path == "rich/values.xml" {
+                *bytes =
+                    format!("<rvData count=\"2\"><rv s=\"0\"><v>unused</v></rv><rv s=\"1\"><v>0</v><v>{code}</v><v>0</v></rv></rvData>").into_bytes();
+            }
+            if path == "rich/structures.xml" {
+                *bytes = br#"<rvStructures count="2"><s t="unsupported"><k n="value" t="s"/></s><s t="_error"><k n="rwOffset" t="i"/><k n="errorType" t="i"/><k n="colOffset" t="i"/></s></rvStructures>"#.to_vec();
+            }
+        }
+        let (loaded, _) = read_xlsx(&zip(&parts)).unwrap();
+        assert_eq!(loaded.sheet(0).unwrap().value(at("A1")), Value::Error(expected));
+    }
+}

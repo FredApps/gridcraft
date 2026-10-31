@@ -148,13 +148,19 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             }
             let sh = cx.sheet_mut(sheet)?;
             // The array takes the whole range: other cells in it lose their contents.
+            // Notify calculation about every removed formula, including spill anchors.
+            let mut cleared = Vec::new();
             for c in range.iter().skip(1).take(1_000_000) {
                 if let Some(old) = sh.cells.get(c).filter(|x| !x.value.is_empty() || x.formula.is_some()) {
                     let style = old.style;
                     sh.set_cell(c, Cell { style, ..Cell::default() });
+                    cleared.push(c);
                 }
             }
             sh.set_cell(range.start, cell);
+            for c in cleared {
+                cx.touch(sheet, c);
+            }
             cx.touch(sheet, range.start);
             return Ok(Json::Null);
         }

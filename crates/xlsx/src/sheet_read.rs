@@ -559,14 +559,18 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         }
         picture
     });
-    if let Some(picture) = picture {
+    if let Some(crate::richdata::RichValue::Picture(picture)) = &picture {
         if c.child("f").is_some() {
             cx.warn("formula-generated cell pictures were imported as static pictures; their formulas were not retained");
         }
-        sheet.set_picture(pos, picture);
+        sheet.set_picture(pos, picture.clone());
         sheet.set_style(pos, style);
         return;
     }
+    let value = match picture {
+        Some(crate::richdata::RichValue::Error(error)) if c.attr("t") == Some("e") => Value::Error(error),
+        _ => value,
+    };
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     let value = if formula.is_none() && in_dynamic(st, pos) { Value::Empty } else { value };

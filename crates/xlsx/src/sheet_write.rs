@@ -755,6 +755,10 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         Value::Array(a) => a.get(0, 0).cloned().unwrap_or(Value::Empty),
         v => v,
     };
+    if let Value::Error(error @ (CellError::Spill | CellError::Calc)) = &value {
+        let vm = out.cell_pictures.error_index(*error);
+        let _ = write!(s, " vm=\"{vm}\"");
+    }
     let value = match value {
         Value::Error(CellError::Circ) => Value::Number(0.0),
         // #SPILL! and #CALC! are not error codes of the file format (Excel refuses a file that
