@@ -561,7 +561,7 @@ fn bulk_formula_history_is_bounded_and_latest_edit_still_undoes() {
             sheet.cells.set(CellRef::new(row, 0), Cell::formula(Formula::new(&format!("=B{}+{}", row + 1, version))));
         }
         current = Arc::new(next);
-        crate::push_history_with_budget(&mut history, format!("edit {version}"), previous, &current, crate::Selection::default(), budget);
+        crate::push_history_with_budget(&mut history, format!("edit {version}"), previous, &current, crate::Selection::default(), Vec::new(), budget);
     }
     assert!(history.len() < 5, "bulk edits should evict old steps before reaching the count limit");
     assert_eq!(history.last().unwrap().label, "edit 4");
@@ -3338,6 +3338,42 @@ fn undo_and_redo_list_the_circular_references_of_the_restored_cells() {
     // Undoing the loop itself lists none.
     s.execute("edit.undo", json!({"steps": 2})).unwrap();
     assert!(listed(&s).is_empty());
+}
+
+#[test]
+fn restored_history_keeps_dynamic_loops_and_cached_values() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=INDIRECT(\"A1\")"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=IF(FALSE,B1,42)"})).unwrap();
+    let original = s.doc().unwrap().calc.circular.clone();
+    assert_eq!(original, vec![(0, CellRef::parse("A1").unwrap())]);
+    let cached = v(&s, "A1");
+    s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    assert!(s.doc().unwrap().calc.circular.is_empty());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().calc.circular, original);
+    assert_eq!(v(&s, "A1"), cached);
+    assert_eq!(v(&s, "B1"), Value::Number(42.0));
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(s.doc().unwrap().calc.circular.is_empty());
+}
+
+#[test]
+fn groups_restore_their_circular_reference_snapshot() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=A1+1"})).unwrap();
+    let original = s.doc().unwrap().calc.circular.clone();
+    let token = s.group_begin("Replace loop").unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    s.group_rollback(token).unwrap();
+    assert_eq!(s.doc().unwrap().calc.circular, original);
+    let token = s.group_begin("Replace loop").unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "8"})).unwrap();
+    s.group_end(token).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().calc.circular, original);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(s.doc().unwrap().calc.circular.is_empty());
 }
 
 fn chart_data(s: &mut Session) {

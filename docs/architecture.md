@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** trivial (the hidden names that hold macros; earlier: macro engine on the engine building blocks) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** undo snapshots retain evaluated circular references · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -45,6 +45,9 @@ including tests, 2026-10-10.
    Undo retains at most 100 steps and trims older steps when its estimated retained cell storage
    exceeds 128 MiB. The newest step remains undoable even if that step alone exceeds the budget.
    The estimate is a history policy, not a measure or hard cap of process memory.
+   Snapshots also retain evaluated circular-reference addresses, including dynamic loops. Undo,
+   redo, group rollback and panic recovery restore them without re-evaluating cached cell values;
+   loops keep their numeric values and can no longer be inferred from a cached `#CIRC!` error.
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
    nodes for range dependents), evaluates in topological order, spills dynamic arrays and reports
    `#SPILL!`/cycles. Volatile functions are always dirty.

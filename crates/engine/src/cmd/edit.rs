@@ -178,6 +178,7 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
     for _ in 0..steps {
         let Some(e) = d.undo.pop() else { break };
         let cur_wb = d.wb.clone();
+        let cur_circular = std::mem::replace(&mut d.calc.circular, e.circular);
         // Redo goes back to the undone edit's cells, not wherever the user clicked before undoing (#1855).
         let cur_selection = e.selection.clone();
         label = e.label.clone();
@@ -186,10 +187,12 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         super::view::keep_zoom(d, &cur_wb);
         // Step by step: a rename and a new sheet undone together match up only one step apart.
         super::extra::keep_view_modes(d, &cur_wb);
-        crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
+        crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection, cur_circular);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    let circular = std::mem::take(&mut d.calc.circular);
     d.calc.rebuild(&d.wb);
+    d.calc.circular = circular;
     d.revision += 1;
     Ok(json!({"undone": label}))
 }
@@ -202,16 +205,19 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
     for _ in 0..steps {
         let Some(e) = d.redo.pop() else { break };
         let cur_wb = d.wb.clone();
+        let cur_circular = std::mem::replace(&mut d.calc.circular, e.circular);
         let cur_selection = d.selection.clone();
         label = e.label.clone();
         d.wb = e.wb;
         d.selection = e.selection;
         super::view::keep_zoom(d, &cur_wb);
         super::extra::keep_view_modes(d, &cur_wb);
-        crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
+        crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection, cur_circular);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    let circular = std::mem::take(&mut d.calc.circular);
     d.calc.rebuild(&d.wb);
+    d.calc.circular = circular;
     d.revision += 1;
     Ok(json!({"redone": label}))
 }

@@ -70,6 +70,8 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 
 #[derive(Clone, Debug)]
 pub struct HistoryEntry {
+    /// Evaluated loops belonging to this snapshot, independent of cached cell values.
+    pub circular: Vec<gridcraft_calc::Key>,
     pub label: String,
     pub wb: Arc<Workbook>,
     pub selection: Selection,
@@ -96,6 +98,7 @@ impl GroupToken {
 /// An open undo group: what runs on `doc` until it ends becomes one undo step.
 #[derive(Clone, Debug)]
 struct OpenGroup {
+    circular: Vec<gridcraft_calc::Key>,
     id: u64,
     doc: u64,
     label: String,
@@ -118,6 +121,7 @@ struct OpenGroup {
 /// workbook alive between commands.
 #[derive(Debug)]
 struct GroupStep {
+    circular: Vec<gridcraft_calc::Key>,
     doc: u64,
     after: Arc<Workbook>,
     selection: Selection,
@@ -255,8 +259,15 @@ fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
     bytes
 }
 
-fn push_history(history: &mut Vec<HistoryEntry>, label: String, wb: Arc<Workbook>, next: &Workbook, selection: Selection) {
-    push_history_with_budget(history, label, wb, next, selection, UNDO_BYTES_LIMIT);
+fn push_history(
+    history: &mut Vec<HistoryEntry>,
+    label: String,
+    wb: Arc<Workbook>,
+    next: &Workbook,
+    selection: Selection,
+    circular: Vec<gridcraft_calc::Key>,
+) {
+    push_history_with_budget(history, label, wb, next, selection, circular, UNDO_BYTES_LIMIT);
 }
 
 fn push_history_with_budget(
@@ -265,17 +276,26 @@ fn push_history_with_budget(
     wb: Arc<Workbook>,
     next: &Workbook,
     selection: Selection,
+    circular: Vec<gridcraft_calc::Key>,
     byte_budget: usize,
 ) {
-    push_entry(history, label, wb, next, selection);
+    push_entry(history, label, wb, next, selection, circular);
     trim_to_budget(history, byte_budget);
 }
 
 /// Adds a step without applying the limits: inside a command they wait for the outermost
 /// command to collapse its steps (see [`Session::trim_history`]).
-fn push_entry(history: &mut Vec<HistoryEntry>, label: String, wb: Arc<Workbook>, next: &Workbook, selection: Selection) {
-    let retained_bytes = history_retained_bytes(&wb, next);
-    history.push(HistoryEntry { label, wb, selection, retained_bytes });
+fn push_entry(
+    history: &mut Vec<HistoryEntry>,
+    label: String,
+    wb: Arc<Workbook>,
+    next: &Workbook,
+    selection: Selection,
+    circular: Vec<gridcraft_calc::Key>,
+) {
+    let retained_bytes =
+        history_retained_bytes(&wb, next).saturating_add(circular.capacity().saturating_mul(std::mem::size_of::<gridcraft_calc::Key>()));
+    history.push(HistoryEntry { label, wb, selection, circular, retained_bytes });
 }
 
 /// Drops the oldest steps past [`UNDO_LIMIT`] or `byte_budget`, always keeping the latest one
@@ -698,7 +718,7 @@ impl Session {
         }
         let query = !spec.journal && !spec.undoable;
         self.guard_macro_command(id, query)?;
-        let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
+        let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone(), d.calc.circular.clone()));
         // A dry run inside this command that a panic cuts short leaves journaling paused and its
         // touch log open; the panic branch puts both back.
         let paused_before = self.journal_paused;
@@ -717,9 +737,13 @@ impl Session {
             self.docs.iter().find(|d| d.uid == *uid).map(|d| (d.undo.clone(), d.redo.clone()))
         });
         // The groups open on the document before the command (usually none), for the same reason.
-        let groups_before: Vec<(u64, String, Arc<Workbook>, Selection)> = match &before {
+        let groups_before: Vec<_> = match &before {
             Some((uid, ..)) => {
-                self.groups.iter().filter(|g| g.doc == *uid).map(|g| (g.id, g.label.clone(), g.wb.clone(), g.selection.clone())).collect()
+                self.groups
+                    .iter()
+                    .filter(|g| g.doc == *uid)
+                    .map(|g| (g.id, g.label.clone(), g.wb.clone(), g.selection.clone(), g.circular.clone()))
+                    .collect()
             }
             None => Vec::new(),
         };
@@ -759,7 +783,7 @@ impl Session {
                 // command opened.
                 self.groups.retain(|g| g.id < first_group);
                 let group_open = before.as_ref().is_some_and(|(uid, ..)| self.groups.iter().any(|g| g.doc == *uid));
-                if let Some((uid, wb, sel)) = &before
+                if let Some((uid, wb, sel, circular)) = &before
                     && let Some(d) = self.docs.iter_mut().find(|d| d.uid == *uid)
                 {
                     d.wb = wb.clone();
@@ -772,13 +796,14 @@ impl Session {
                     // ended (its token went with the command), and keeps a step from its start to
                     // the restored workbook, so Undo still returns to the state before the group.
                     if !group_open
-                        && let Some((_, label, wb, selection)) = groups_before.into_iter().min_by_key(|g| g.0)
+                        && let Some((_, label, wb, selection, circular)) = groups_before.into_iter().min_by_key(|g| g.0)
                         && !Arc::ptr_eq(&wb, &d.wb)
                     {
-                        push_entry(&mut d.undo, label, wb, &d.wb, selection);
+                        push_entry(&mut d.undo, label, wb, &d.wb, selection, circular);
                         d.redo.clear();
                     }
                     d.calc.rebuild(&d.wb);
+                    d.calc.circular = circular.clone();
                 }
                 if self.journal_paused != paused_before {
                     self.journal_paused = paused_before;
@@ -847,7 +872,7 @@ impl Session {
         let in_group_now = before.as_ref().is_some_and(|(uid, ..)| self.in_group(*uid));
         let was_open = start.is_some_and(|(was_open, _)| was_open);
         if spec.undoable
-            && let Some((uid, wb, sel)) = before
+            && let Some((uid, wb, sel, circular)) = before
             && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid)
             && !Arc::ptr_eq(&d.wb, &wb)
         {
@@ -863,6 +888,7 @@ impl Session {
                     g.start = len;
                     g.wb = wb;
                     g.selection = sel;
+                    g.circular = circular;
                 }
             } else if epoch_changed && was_open {
                 // The group it ended made its step; changes after the end, whether direct or by
@@ -871,7 +897,7 @@ impl Session {
                     && (d.undo.len() > step.len || !Arc::ptr_eq(&step.after, &d.wb))
                 {
                     d.undo.truncate(step.len);
-                    push_entry(&mut d.undo, label, step.after.clone(), &d.wb, step.selection.clone());
+                    push_entry(&mut d.undo, label, step.after.clone(), &d.wb, step.selection.clone(), step.circular.clone());
                     d.redo.clear();
                 }
             } else {
@@ -895,7 +921,7 @@ impl Session {
                 if let Some((_, len)) = start {
                     d.undo.truncate(len);
                 }
-                push_entry(&mut d.undo, label, wb, &d.wb, sel);
+                push_entry(&mut d.undo, label, wb, &d.wb, sel, circular);
                 d.redo.clear();
             }
             // Inside a group the redo history waits for the group: `group_end` clears it when the
@@ -949,6 +975,7 @@ impl Session {
     pub fn group_begin(&mut self, label: &str) -> Result<GroupToken> {
         let d = self.doc()?;
         let g = OpenGroup {
+            circular: d.calc.circular.clone(),
             id: self.next_group,
             doc: d.uid,
             label: label.trim_end_matches('…').to_string(),
@@ -976,13 +1003,19 @@ impl Session {
         d.undo.truncate(g.start);
         let changed = !Arc::ptr_eq(&d.wb, &g.wb);
         if changed && !outer {
-            push_entry(&mut d.undo, g.label, g.wb, &d.wb, g.selection);
+            push_entry(&mut d.undo, g.label, g.wb, &d.wb, g.selection, g.circular);
             d.redo.clear();
             d.revision += 1;
         }
         if !outer {
-            self.group_step =
-                Some(GroupStep { doc: g.doc, after: d.wb.clone(), selection: d.selection.clone(), len: d.undo.len(), stepped: changed });
+            self.group_step = Some(GroupStep {
+                circular: d.calc.circular.clone(),
+                doc: g.doc,
+                after: d.wb.clone(),
+                selection: d.selection.clone(),
+                len: d.undo.len(),
+                stepped: changed,
+            });
         }
         // Inside a command, the outermost command applies the history limit when it finishes.
         if self.depth == 0 {
@@ -1049,6 +1082,7 @@ impl Session {
             d.wb = g.wb;
             d.calc.rebuild(&d.wb);
         }
+        d.calc.circular = g.circular;
         d.selection = g.selection;
         d.undo.truncate(g.start);
         d.redo = g.redo;
@@ -1062,7 +1096,14 @@ impl Session {
         // step left it (this group began there); otherwise the rollback is where the group ended.
         let kept = self.group_step.as_ref().is_some_and(|st| st.doc == g.doc && st.len == g.start && Arc::ptr_eq(&st.after, &d.wb));
         if !kept && !self.groups.iter().any(|o| o.doc == g.doc) {
-            self.group_step = Some(GroupStep { doc: g.doc, after: d.wb.clone(), selection: d.selection.clone(), len: g.start, stepped: false });
+            self.group_step = Some(GroupStep {
+                circular: d.calc.circular.clone(),
+                doc: g.doc,
+                after: d.wb.clone(),
+                selection: d.selection.clone(),
+                len: g.start,
+                stepped: false,
+            });
         }
         Ok(())
     }
