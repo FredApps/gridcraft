@@ -112,7 +112,7 @@ fn the_title_bar_save_button_saves_the_cell_being_typed() {
     h.run_steps(2);
     assert!(h.state().editor.is_some());
     // Target the actual button, not a tooltip that can outlive the hover position.
-    let save = h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").rect().center();
+    let save = h.get_by_role_and_label(egui::accesskit::Role::Button, "Save workbook").rect().center();
     h.hover_at(save);
     h.run_steps(1);
     for pressed in [true, false] {
