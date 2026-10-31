@@ -425,3 +425,13 @@ fn a_field_over_32767_characters_is_cut() {
     let wb = read_csv(src.as_bytes(), &CsvOptions::default()).unwrap();
     assert_eq!(v(&wb, 0, 2), Value::text("z".repeat(32_767)));
 }
+
+#[test]
+fn delimiter_declaration_counts_toward_csv_output_limit() {
+    let mut sheet = Sheet::new("Sheet1");
+    sheet.set_value(CellRef::new(0, 0), Value::text("sep=;"));
+    let export = |limit| write_csv_limited(&sheet, b',', limit, |c| sheet.value(c).as_text().unwrap_or("").to_string());
+    assert!(matches!(export(7), Err(IoError::TooLarge(_))));
+    assert!(matches!(export(13), Err(IoError::TooLarge(_))));
+    assert_eq!(export(14).unwrap(), b"sep=,\r\nsep=;\r\n");
+}

@@ -407,7 +407,11 @@ pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, mut cell_te
     // A first row that would read as Excel's `sep=` line (a lone `sep=;` cell) stays data behind a
     // `sep=` line of its own naming the delimiter, which GridCraft and Excel both drop on opening.
     if out.split(['\r', '\n']).next().is_some_and(|first| sep_line(first, '"').is_some()) {
-        out.insert_str(0, &format!("sep={delim}\r\n"));
+        let prefix = format!("sep={delim}\r\n");
+        if out.len().saturating_add(prefix.len()) > limit {
+            return Err(too_large("too large after adding the delimiter declaration".into()));
+        }
+        out.insert_str(0, &prefix);
     }
     Ok(out.into_bytes())
 }
