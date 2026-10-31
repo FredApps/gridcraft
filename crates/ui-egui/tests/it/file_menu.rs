@@ -98,24 +98,6 @@ fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0));
 }
 
-/// Where the title bar's icon button for `name` is. Its icon has no text, so it is found by
-/// hovering along the title bar until its tooltip ("Save (⌘S)") shows.
-fn title_bar_button(h: &mut egui_kittest::Harness<'static, SheetApp>, name: &str) -> egui::Pos2 {
-    let autosave = h.get_by_label("AutoSave").rect();
-    let tip = format!("{name} (");
-    let mut x = autosave.right();
-    while x < autosave.right() + 300.0 {
-        let at = egui::pos2(x, autosave.center().y);
-        h.hover_at(at);
-        h.run_steps(3);
-        if h.query_by_label_contains(&tip).is_some() {
-            return at;
-        }
-        x += 6.0;
-    }
-    panic!("no title bar button shows a {tip:?} tooltip");
-}
-
 #[test]
 fn the_title_bar_save_button_saves_the_cell_being_typed() {
     // Regression test for #223: the title bar's Save button saved the file without the cell the
@@ -129,7 +111,10 @@ fn the_title_bar_save_button_saves_the_cell_being_typed() {
     h.input_mut().events.push(egui::Event::Text("123".into()));
     h.run_steps(2);
     assert!(h.state().editor.is_some());
-    let save = title_bar_button(&mut h, "Save");
+    // Target the actual button, not a tooltip that can outlive the hover position.
+    let save = h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").rect().center();
+    h.hover_at(save);
+    h.run_steps(1);
     for pressed in [true, false] {
         h.input_mut().events.push(egui::Event::PointerButton {
             pos: save,

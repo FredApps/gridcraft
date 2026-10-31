@@ -64,7 +64,9 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             if __k.clicked() {
                 app.open_dialog("start", json!({}));
             }
-            if icon_button(ui, Icon::Save, t.text_dim, "Save", vec2(26.0, ch)).clicked()
+            let save = icon_button(ui, Icon::Save, t.text_dim, "Save", vec2(26.0, ch));
+            save.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Save"));
+            if save.clicked()
                 // File operations must include the cell the user is still editing (as the File > Save menu item already does).
                 && app.commit_edit(0, 0, false, false)
             {
