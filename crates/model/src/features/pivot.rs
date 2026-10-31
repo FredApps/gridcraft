@@ -213,7 +213,7 @@ impl PivotTable {
     pub fn set_filter(&mut self, col: &str, selected: Option<Vec<String>>, group: PivotDateGroup) {
         let on_axis = self.axis().any(|f| f.source_col.eq_ignore_ascii_case(col));
         let date_group = if group == self.implied_group(col) { PivotDateGroup::None } else { group };
-        let i = self.filters.iter().position(|f| f.source_col.eq_ignore_ascii_case(col));
+        let i = self.filters.iter().position(|f| f.source_col.eq_ignore_ascii_case(col) && self.filter_group(f) == group);
         match (i, selected) {
             (Some(i), None) => {
                 let Some(f) = self.filters.get(i) else { return };
@@ -263,5 +263,34 @@ impl Default for PivotTable {
             values_on_rows: false,
             values_position: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    #[test]
+    fn selecting_and_clearing_months_preserves_the_year_filter() {
+        let mut pt = PivotTable {
+            rows: vec![
+                PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Years, ..Default::default() },
+                PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, ..Default::default() },
+            ],
+            filters: vec![PivotFilter { source_col: "Date".into(), selected: Some(vec!["2024".into()]), ..Default::default() }],
+            ..Default::default()
+        };
+        let year = pt.filters[0].clone();
+        pt.set_filter("Date", Some(vec!["Jan".into()]), PivotDateGroup::Months);
+        assert_eq!(pt.filters.len(), 2);
+        assert_eq!(pt.filters[0], year);
+        assert_eq!(pt.filter_group(&pt.filters[1]), PivotDateGroup::Months);
+        assert_eq!(pt.filters[1].selected, Some(vec!["Jan".into()]));
+        pt.set_filter("Date", Some(vec!["Feb".into()]), PivotDateGroup::Months);
+        assert_eq!(pt.filters.len(), 2);
+        assert_eq!(pt.filters[0], year);
+        assert_eq!(pt.filters[1].selected, Some(vec!["Feb".into()]));
+        pt.set_filter("Date", None, PivotDateGroup::Months);
+        assert_eq!(pt.filters, vec![year]);
     }
 }

@@ -3,10 +3,10 @@
 //! An extension is kept only when its URI is on an allowlist of entries that are one element
 //! holding attributes and nothing else: no children, no text, no relationship ids, no references
 //! to cells, names or parts GridCraft renumbers. They are rebuilt from the parsed element with the
-//! schema's attributes only, in source order. Extensions that point at other content (slicer
-//! caches and lists, timelines, the data model, PivotTable caches, Google Sheets custom data with
+//! schema's attributes only, in source order. Extensions that point at unmodelled content (timelines, the data model, PivotTable caches,
+//! Google Sheets custom data with
 //! its `r:id`) are left out: GridCraft rewrites or drops what they point at. Extensions GridCraft
-//! models itself (x14 conditional formats, data validations, sparklines) are read into the model
+//! models itself (PivotTable slicers, x14 conditional formats, data validations, sparklines) are read into the model
 //! and written by the sheet writer, never kept here. Every other extension is dropped and counted
 //! in a read warning.
 //!
@@ -70,7 +70,7 @@ const SHEET: &[Allowed] = &[
 
 /// Sheet extension elements the sheet reader models (x14 conditional formats, data validations,
 /// sparklines).
-const SHEET_MODELLED: &[&str] = &["conditionalFormattings", "dataValidations", "sparklineGroups"];
+const SHEET_MODELLED: &[&str] = &["conditionalFormattings", "dataValidations", "sparklineGroups", "slicerList"];
 
 /// Longest attribute value kept (the kept attributes are flags and small numbers).
 const MAX_VALUE: usize = 32;
@@ -149,6 +149,14 @@ pub(crate) fn keep_workbook(cx: &mut Ctx<'_>, ext_lst: Option<&El>, p: &mut Pres
     let mut lost = vec![];
     for ext in list.kids("ext") {
         let u = uri(ext);
+        // The slicer reader resolves these relationships and reports unsupported slicers itself.
+        // Their raw ids must not be kept, but successfully modelled slicers were not dropped.
+        if ext.child("slicerCaches").is_some() {
+            if ext.children.iter().any(|c| c.name != "slicerCaches") {
+                dropped(&mut lost, u);
+            }
+            continue;
+        }
         if kept.iter().any(|k| k.eq_ignore_ascii_case(u)) {
             continue;
         }

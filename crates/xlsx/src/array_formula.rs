@@ -163,7 +163,9 @@ pub(crate) fn apply_legacy(wb: &mut Workbook, cells: Vec<(usize, Vec<CellRef>)>,
 
 /// The dynamic-array reading of a legacy formula, when it differs.
 fn legacy(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions: FunctionInfo) -> Option<Formula> {
-    if formula.array.is_some() {
+    // A repeated row can replace a previously collected legacy cell with a dynamic formula.
+    // Classify the surviving formula, not just the earlier cell's position.
+    if formula.dynamic || formula.array.is_some() {
         return None;
     }
     let expr = formula.expr_arc()?;

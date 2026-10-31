@@ -480,3 +480,18 @@ fn outline_summary_directions_round_trip() {
     let xml = String::from_utf8(crate::package::Package::open(&bytes).unwrap().read("xl/worksheets/sheet1.xml").unwrap().unwrap()).unwrap();
     assert!(!xml.contains("outlinePr"), "{xml}");
 }
+
+#[test]
+fn repeated_row_keeps_the_surviving_formulas_array_mode() {
+    let legacy = r#"<row r="1"><c r="A1"><f>SEQUENCE(2)</f><v>1</v></c></row>"#;
+    let dynamic = r#"<row r="1"><c r="A1" cm="1"><f t="array" ref="A1:A2">SEQUENCE(2)</f><v>1</v></c></row>"#;
+    for (first, last, is_dynamic) in [(legacy, dynamic, true), (dynamic, legacy, false)] {
+        let body = format!("<sheetData>{first}{last}</sheetData>");
+        let (wb, report) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+        let cell = wb.sheet(0).unwrap().cell(gridcraft_core::CellRef::new(0, 0)).unwrap();
+        let formula = cell.formula.as_ref().unwrap();
+        assert_eq!(formula.dynamic, is_dynamic);
+        assert_eq!(formula.text, if is_dynamic { "SEQUENCE(2)" } else { "@SEQUENCE(2)" });
+        assert!(report.warnings.iter().any(|w| w.contains("dropped or replaced")));
+    }
+}

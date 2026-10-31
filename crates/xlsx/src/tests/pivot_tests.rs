@@ -765,6 +765,7 @@ fn pivot_slicer_round_trips() {
 
     let (back, report) = read_xlsx(&bytes).unwrap();
     assert!(report.warnings.iter().all(|w| !w.contains("slicer") && !w.contains("embedded object")), "{:?}", report.warnings);
+    assert!(!report.warnings.iter().any(|w| w.contains("Excel extension")), "modelled slicer extensions were kept: {:?}", report.warnings);
     let a = &wb.sheet(1).unwrap();
     let b = &back.sheet(1).unwrap();
     assert_eq!(b.slicers.len(), 1);
