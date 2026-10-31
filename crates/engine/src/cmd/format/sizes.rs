@@ -96,6 +96,7 @@ pub(super) fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
                 let e = sh.cols.entry(c).or_default();
                 e.size = Some(w as f32);
                 e.hidden = w == 0.0;
+                e.custom = true;
             }
         }
         Ok(Json::Null)
@@ -133,7 +134,7 @@ pub fn approx_text_width(text: &str, size: f32, bold: bool) -> f32 {
 
 /// Distinct texts AutoFit measures exactly; past this many, `Session::text_width` is asked for a
 /// quick measure so a huge column doesn't lay out every value.
-const EXACT_TEXT_WIDTHS: usize = 2_000;
+pub(super) const EXACT_TEXT_WIDTHS: usize = 2_000;
 
 pub(super) fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, lines) = line_targets(s, p, false)?;
@@ -185,6 +186,7 @@ pub(super) fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
             let e = sh.cols.entry(c).or_default();
             e.size = Some(w.ceil());
             e.hidden = false;
+            e.custom = false; // AutoFit makes a width set by hand automatic again (Excel).
         }
         Ok(Json::Null)
     })
