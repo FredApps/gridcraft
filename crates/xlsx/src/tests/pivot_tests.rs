@@ -873,6 +873,18 @@ fn pivot_slicer_shares_no_cache_across_calculated_fields() {
     report.pivots[units].calculated_fields.push(PivotCalcField { name: "Price".into(), formula: "=Sales/Units".into() });
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(back.sheet(1).unwrap().slicers[0].source, wb.sheet(1).unwrap().slicers[0].source);
+
+    // Case-folding the formula would conflate these different numeric results and replace one
+    // table's calculated field with the other's when their caches are shared.
+    let formulas = [r#"=IF(EXACT("US","us"),Sales,Units)"#, r#"=IF(EXACT("us","us"),Sales,Units)"#];
+    let report = wb.sheet_mut(1).unwrap();
+    report.pivots[pi].calculated_fields[0].formula = formulas[0].into();
+    report.pivots[units].calculated_fields[0].formula = formulas[1].into();
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    for (name, formula) in ["Sales by Region", "Units by Region"].into_iter().zip(formulas) {
+        let pivot = back.sheet(1).unwrap().pivots.iter().find(|p| p.name == name).unwrap();
+        assert_eq!(pivot.calculated_fields[0].formula, formula);
+    }
 }
 
 /// A slicer on a date field grouped by quarters lists the groups, in date order.

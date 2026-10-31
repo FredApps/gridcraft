@@ -377,7 +377,9 @@ pub(crate) fn can_share(wb: &Workbook, members: &[(usize, usize)], slicer_fields
             }
         }
     }
-    let formula = |f: &str| f.trim().trim_start_matches('=').trim().to_lowercase();
+    // Formula text can contain case-sensitive string literals (EXACT, FIND, etc.). Do not
+    // case-fold it when deciding whether sharing may replace another table's definition.
+    let formula = |f: &str| f.trim().trim_start_matches('=').trim().to_string();
     let calc = |pt: &PivotTable| -> Vec<(String, String)> {
         let mut v: Vec<(String, String)> = pt.calculated_fields.iter().map(|cf| (cf.name.trim().to_lowercase(), formula(&cf.formula))).collect();
         v.sort();
