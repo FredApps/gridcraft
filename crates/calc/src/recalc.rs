@@ -341,7 +341,7 @@ impl Calc {
             let now = self.now();
             let mut rng = self.rng;
             let tp = prof_now();
-            let (results, spills, cycles) = {
+            let (results, spills, cycles, spill_conflict) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
@@ -353,8 +353,16 @@ impl Calc {
                         eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
                     }
                 }
-                (host.results, host.spills, host.cycles)
+                (host.results, host.spills, host.cycles, host.spill_conflict)
             };
+            // Competing array footprints are spatial dependencies, not formula references.
+            // Rebuild their allocation in the same order as Calculate Now instead of letting
+            // whichever array happened to be edited first keep the overlapping cells.
+            // Ordinary scalar edits and non-overlapping arrays stay incremental.
+            if !full && spill_conflict && wb.calc.mode != CalcMode::Manual {
+                self.recalc_all(wb);
+                return;
+            }
             self.rng = rng;
             if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
                 eprintln!("  eval {} formulas {:.1} ms", results.len(), prof_now() - tp);

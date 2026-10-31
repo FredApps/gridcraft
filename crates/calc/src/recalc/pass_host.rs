@@ -21,6 +21,8 @@ pub(super) struct PassHost<'a> {
     in_progress: HashSet<Key>,
     /// New spills found during the pass: anchor → array.
     pub(super) spills: HashMap<Key, std::sync::Arc<Array>>,
+    /// This pass encountered another anchor's existing spill footprint.
+    pub(super) spill_conflict: bool,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
@@ -75,6 +77,7 @@ impl<'a> PassHost<'a> {
             pending: exprs.keys().copied().collect(),
             in_progress: HashSet::default(),
             spills: HashMap::default(),
+            spill_conflict: false,
             used: HashMap::default(),
             rng,
             now,
@@ -287,6 +290,14 @@ impl PassHost<'_> {
                 // value -- a FILTER matching one row, a SORT or UNIQUE over one item -- so `C1#`
                 // is the 1 x 1 range and `ROWS(C1#)` is 1, as in Excel (#1491). A formula that
                 // returns a scalar never reaches this arm, so it does not become an anchor.
+                let end = CellRef::new(
+                    k.1.row.saturating_add((a.rows as u32).saturating_sub(1)),
+                    k.1.col.saturating_add((a.cols as u32).saturating_sub(1)),
+                );
+                let range = RangeRef::new(k.1, end);
+                self.spill_conflict |= self.wb.sheet(k.0).is_some_and(|sheet| {
+                    sheet.spill_ranges.iter().any(|(anchor, old)| *anchor != k.1 && old.intersects(&range))
+                });
                 self.spills.insert(k, a.clone());
                 a.data.first().cloned().unwrap_or_default()
             }

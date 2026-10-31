@@ -253,7 +253,16 @@ impl Harness {
 
     fn step(&mut self, i: usize, id: &str, params: &Json) -> Result<(), Failure> {
         let before = self.wb();
+        let old_first = self.s.doc().expect("document").undo.first().map(|entry| entry.wb.clone());
+        let old_bytes: usize = self.s.doc().expect("document").undo.iter().map(|entry| entry.retained_bytes).sum();
         let r = self.s.execute(id, params.clone());
+        if let (Some(old), Some(first)) = (old_first, self.s.doc().expect("document").undo.first())
+            && !Arc::ptr_eq(&old, &first.wb)
+        {
+            let history = &self.s.doc().expect("document").undo;
+            let bytes: usize = history.iter().map(|entry| entry.retained_bytes).sum();
+            eprintln!("history start changed after step {i} {id}: old retained bytes {old_bytes}, new {bytes}, entries {}", history.len());
+        }
         self.s.take_ui_requests();
         if let Err(EngineError::Internal(_, msg)) = &r {
             return Err(fail(i, "panic", format!("`{id}` panicked (caught by Session::execute): {msg}")));
@@ -1110,51 +1119,27 @@ fn view_mode_switch_is_not_an_undo_difference() {
 }
 
 // Expanded verification cases reported on 2026-10-31. Keep their full 200-step
-// budgets in CI: the default short smoke test does not reach these failures.
+// budgets in CI and report all failures, even when the test runner uses fail-fast.
 #[test]
-fn verification_seed_3_preserves_workbook_invariants() {
-    let (_, sequence, failure) = run_seed(3, 200);
-    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
+fn verification_seeds_preserve_workbook_invariants() {
+    let mut failures = Vec::new();
+    for seed in [3, 6, 14, 30, 43, 45, 48, 49] {
+        let (_, sequence, failure) = run_seed(seed, 200);
+        if let Some(failure) = failure {
+            failures.push(format!("seed {seed}: {failure:?}; sequence: {sequence:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
-fn verification_seed_6_preserves_workbook_invariants() {
-    let (_, sequence, failure) = run_seed(6, 200);
-    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
-}
-
-#[test]
-fn verification_seed_14_preserves_workbook_invariants() {
-    let (_, sequence, failure) = run_seed(14, 200);
-    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
-}
-
-#[test]
-fn verification_seed_30_preserves_workbook_invariants() {
-    let (_, sequence, failure) = run_seed(30, 200);
-    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
-}
-
-#[test]
-fn verification_seed_43_preserves_workbook_invariants() {
-    let (_, sequence, failure) = run_seed(43, 200);
-    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
-}
-
-#[test]
-fn verification_seed_45_preserves_workbook_invariants() {
-    let (_, sequence, failure) = run_seed(45, 200);
-    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
-}
-
-#[test]
-fn verification_seed_48_preserves_workbook_invariants() {
-    let (_, sequence, failure) = run_seed(48, 200);
-    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
-}
-
-#[test]
-fn verification_seed_49_preserves_workbook_invariants() {
-    let (_, sequence, failure) = run_seed(49, 200);
-    assert!(failure.is_none(), "{failure:?}; sequence: {sequence:?}");
+fn overlapping_arrays_match_explicit_recalculation() {
+    let failure = replay(
+        "budget",
+        &[
+            ("cell.set".into(), json!({"cell": "D22", "input": "=TRANSPOSE(B3:F10)"})),
+            ("cell.set".into(), json!({"cell": "G21", "input": "=SEQUENCE(5)*I5"})),
+        ],
+    );
+    assert!(failure.is_none(), "{failure:?}");
 }
