@@ -53,6 +53,7 @@ fn chart(kind: ChartKind) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        kept: None,
     }
 }
 
